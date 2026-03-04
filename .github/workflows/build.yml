@@ -48,6 +48,7 @@ jobs:
       run: |
         mkdir -p build/dmg
         cp -R "build/Release/Anime4K Upscaler.app" build/dmg/
+        ln -s /Applications build/dmg/Applications
         # Appended _arm64 to the output file name
         hdiutil create -volname "Anime4K Upscaler ${{ env.VERSION }}" -srcfolder build/dmg -ov -format UDZO "build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg"
 
