@@ -1,5 +1,4 @@
 name: Build and Release
-
 on:
   release:
     types: [created]
@@ -10,7 +9,6 @@ on:
 jobs:
   build:
     runs-on: macos-latest
-
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -21,13 +19,14 @@ jobs:
     - name: Get the version (and strip 'v' prefix if present)
       id: get_version
       run: |
-        TAG_NAME="${{ github.event.release.tag_name }}"
-        TAG_NAME="${{ github.ref_name }}"
+        # Uses release tag if available, otherwise falls back to ref_name
+        TAG_NAME="${{ github.event.release.tag_name || github.ref_name }}"
         # Removes the 'v' (e.g., v1.0.0 becomes 1.0.0) so Xcode doesn't complain
         echo "VERSION=${TAG_NAME#v}" >> $GITHUB_ENV
 
     - name: Update version number
-      run: sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: ${{ env.VERSION }}/" project.yml
+      run: |
+        sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: ${{ env.VERSION }}/" project.yml
 
     - name: Generate Xcode project
       run: xcodegen
