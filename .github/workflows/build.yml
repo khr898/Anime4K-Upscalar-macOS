@@ -3,6 +3,9 @@ name: Build and Release
 on:
   release:
     types: [created]
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   build:
@@ -10,16 +13,18 @@ jobs:
 
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
 
     - name: Install Dependencies
-      run: |
-        brew install ffmpeg
-        brew install xcodegen
+      run: brew install ffmpeg xcodegen
 
-    - name: Get the version
+    - name: Get the version (and strip 'v' prefix if present)
       id: get_version
-      run: echo "VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+      run: |
+        TAG_NAME="${{ github.event.release.tag_name }}"
+        TAG_NAME="${{ github.ref_name }}"
+        # Removes the 'v' (e.g., v1.0.0 becomes 1.0.0) so Xcode doesn't complain
+        echo "VERSION=${TAG_NAME#v}" >> $GITHUB_ENV
 
     - name: Update version number
       run: sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: ${{ env.VERSION }}/" project.yml
@@ -29,20 +34,24 @@ jobs:
 
     - name: Build Xcode project
       run: |
-        xcodebuild build -scheme Anime4K-Upscaler -project Anime4K-Upscaler.xcodeproj -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO
+        xcodebuild build \
+          -scheme "Anime4K-Upscaler" \
+          -project "Anime4K-Upscaler.xcodeproj" \
+          -configuration Release \
+          CODE_SIGN_IDENTITY="" \
+          CODE_SIGNING_ALLOWED=NO \
+          SYMROOT=build
 
     - name: Create DMG
       run: |
         mkdir -p build/dmg
-        cp -R build/Release/Anime4K\ Upscaler.app build/dmg
-        hdiutil create -volname "Anime4K Upscaler ${{ env.VERSION }}" -srcfolder build/dmg -ov -format UDZO build/Anime4K_Upscaler_${{ env.VERSION }}.dmg
+        cp -R "build/Release/Anime4K Upscaler.app" build/dmg/
+        # Appended _arm64 to the output file name
+        hdiutil create -volname "Anime4K Upscaler ${{ env.VERSION }}" -srcfolder build/dmg -ov -format UDZO "build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg"
 
     - name: Upload Release Asset
-      uses: actions/upload-release-asset@v1
+      uses: softprops/action-gh-release@v2
+      with:
+        files: build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ github.event.release.upload_url }}
-        asset_path: ./build/Anime4K_Upscaler_${{ env.VERSION }}.dmg
-        asset_name: Anime4K_Upscaler_${{ env.VERSION }}.dmg
-        asset_content_type: application/octet-stream
