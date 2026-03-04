@@ -1,0 +1,20 @@
+# Xcode
+.DS_Store
+build/
+DerivedData/
+
+## Project files
+*.xcodeproj
+*.xcworkspace
+
+# User-specific files
+*.xcuserdatad
+*.xcscmblueprint
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Vim swap files
+*.swp
+*.swo
