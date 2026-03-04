@@ -1,0 +1,48 @@
+name: Build and Release
+
+on:
+  release:
+    types: [created]
+
+jobs:
+  build:
+    runs-on: macos-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+
+    - name: Install Dependencies
+      run: |
+        brew install ffmpeg
+        brew install xcodegen
+
+    - name: Get the version
+      id: get_version
+      run: echo "VERSION=${{ github.event.release.tag_name }}" >> $GITHUB_ENV
+
+    - name: Update version number
+      run: sed -i '' "s/MARKETING_VERSION: .*/MARKETING_VERSION: ${{ env.VERSION }}/" project.yml
+
+    - name: Generate Xcode project
+      run: xcodegen
+
+    - name: Build Xcode project
+      run: |
+        xcodebuild build -scheme Anime4K-Upscaler -project Anime4K-Upscaler.xcodeproj -configuration Release CODE_SIGN_IDENTITY="" CODE_SIGNING_ALLOWED=NO
+
+    - name: Create DMG
+      run: |
+        mkdir -p build/dmg
+        cp -R build/Release/Anime4K\ Upscaler.app build/dmg
+        hdiutil create -volname "Anime4K Upscaler ${{ env.VERSION }}" -srcfolder build/dmg -ov -format UDZO build/Anime4K_Upscaler_${{ env.VERSION }}.dmg
+
+    - name: Upload Release Asset
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ github.event.release.upload_url }}
+        asset_path: ./build/Anime4K_Upscaler_${{ env.VERSION }}.dmg
+        asset_name: Anime4K_Upscaler_${{ env.VERSION }}.dmg
+        asset_content_type: application/octet-stream

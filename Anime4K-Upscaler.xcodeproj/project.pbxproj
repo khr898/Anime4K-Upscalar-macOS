@@ -1,0 +1,563 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		122931FF1604D6B0667FAE20 /* ProgressRow.swift in Sources */ = {isa = PBXBuildFile; fileRef = CA6D8287A51700AD60CE6C09 /* ProgressRow.swift */; };
+		2A96F151630110AE6ED4B96E /* Anime4K_Upscale_CNN_x2_M.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 956A89DCC7E0B27A0E223938 /* Anime4K_Upscale_CNN_x2_M.glsl */; };
+		2D1E3EDE94CC68E00CFE3979 /* ModePicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED2AE055F7444879407DF2E1 /* ModePicker.swift */; };
+		2FE15FAEAF8C91BE64BC90D0 /* Anime4K_Restore_CNN_S.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 777B1166CCE228F09C178993 /* Anime4K_Restore_CNN_S.glsl */; };
+		3DFC521C94DE2D4097CCB5BB /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A19063BF4FF89203EC323802 /* Models.swift */; };
+		4384BA35284326BCE52FB91E /* Anime4K_Restore_CNN_Soft_M.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 1F5548C5F7ADD7830955545E /* Anime4K_Restore_CNN_Soft_M.glsl */; };
+		48523504D7521577DCB48B67 /* ProcessingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E7851AE8603F684A5F07AA /* ProcessingView.swift */; };
+		4CE7E1BAEDEF542413E5B9AA /* UpscaleView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2410F849A2FDFE49901C566A /* UpscaleView.swift */; };
+		4DA7B842A03594651151DC49 /* StreamOptimizeModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58DFA224F4183EBBD5C3425E /* StreamOptimizeModels.swift */; };
+		587EE35E38AF6AD6114C8484 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 9B323107B0B004C2901C8369 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl */; };
+		661B50E3876C482F113BF492 /* StreamOptimizeViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = B78F5D3177A0DDFB81491BE7 /* StreamOptimizeViewModel.swift */; };
+		661FBB96FFA9E8A0B47AAEBC /* Anime4K_Restore_CNN_Soft_VL.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 7633285AE9CBEB9D11831510 /* Anime4K_Restore_CNN_Soft_VL.glsl */; };
+		66F50577A04816CF6AEB1E4A /* CompressViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5312DA1883BAA4EEF9B2C6C3 /* CompressViewModel.swift */; };
+		74458BAFC68984A77511814B /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A40B8703B26D3FDCCDE88C6 /* ContentView.swift */; };
+		7B2FF9C9707B08F65E8D341E /* EmptyStateView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 00C55DDA1F915EAA8F91DC3F /* EmptyStateView.swift */; };
+		7B7728604A3D0C3E99731E3E /* Anime4K_Upscale_CNN_x2_VL.glsl in Resources */ = {isa = PBXBuildFile; fileRef = F30407CF81F8DA05FA361E01 /* Anime4K_Upscale_CNN_x2_VL.glsl */; };
+		90D33D19D2D6C4AED02F8DE2 /* Anime4K_Upscale_Denoise_CNN_x2_M.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 38138333557AC2F3410306AE /* Anime4K_Upscale_Denoise_CNN_x2_M.glsl */; };
+		9112F6E855D39657DEAA1CCE /* AppViewModel.swift in Sources */ = {isa = PBXBuildFile; fileRef = E20EB53AC70827683E15997E /* AppViewModel.swift */; };
+		9D7AA03BA6CEB87009AB064D /* StreamOptimizeView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F9065731947AE4E7B3CC172A /* StreamOptimizeView.swift */; };
+		9E8FB06CB3822A6A649D1825 /* FileListView.swift in Sources */ = {isa = PBXBuildFile; fileRef = BA65557BF36E55224D10E8A3 /* FileListView.swift */; };
+		A907FE0561EE6303348C7D99 /* SecurityScopeManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A0C53583933AE8354D6DF90F /* SecurityScopeManager.swift */; };
+		AAB069C019C50ABACB9D277F /* CompressView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 11A8E564C93E2C75318A2AE1 /* CompressView.swift */; };
+		B44CB7DC810842656F41CB53 /* Anime4K_Upscale_CNN_x2_S.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 68A505F720355F3A65A0B09B /* Anime4K_Upscale_CNN_x2_S.glsl */; };
+		C0374F025116D3C9E5BC10A5 /* Anime4K_Restore_CNN_VL.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 13386A1A8D2E9F1EC1B4A9F7 /* Anime4K_Restore_CNN_VL.glsl */; };
+		C1921FB64741D7AEB25E5A1A /* ConfigurationPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 286C375B47DB82B67FE79854 /* ConfigurationPanel.swift */; };
+		CADBC497E4C2CB21ED05DA09 /* Anime4K_UpscalerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 670F2DCCD6218A17FFD998CF /* Anime4K_UpscalerApp.swift */; };
+		D0FE1DA303C729F4266886E1 /* CompressModels.swift in Sources */ = {isa = PBXBuildFile; fileRef = FCC63021CDE4479CB5D16BB0 /* CompressModels.swift */; };
+		D6DE73B0AFD776AF1173CFA9 /* ProcessingEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6ABD734EE699E0C5815EB015 /* ProcessingEngine.swift */; };
+		DFD4850FD14FE48F3ED2380C /* DurationProbe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 542237CADE805C5DB420E832 /* DurationProbe.swift */; };
+		E90E9BE7D366AD255A2C0519 /* Anime4K_Restore_CNN_Soft_S.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 37A190853E217F152BE9419B /* Anime4K_Restore_CNN_Soft_S.glsl */; };
+		ED57814D05E8071A856CCB17 /* Anime4K_Restore_CNN_M.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 204D70DD65E7D8E6BE7CDFA7 /* Anime4K_Restore_CNN_M.glsl */; };
+		F17BC2B90A3BF8D77B91C430 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 4D962A2B6F5F4A2D8AD5061B /* Assets.xcassets */; };
+		F9251B71ED8B7AA517694EBA /* Anime4K_Clamp_Highlights.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 2B451A10A73C09267FEF3CFB /* Anime4K_Clamp_Highlights.glsl */; };
+		FEAFE900249F29CC1A61D609 /* FFmpegLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3BC0F57BB1249B7DC5DA8793 /* FFmpegLocator.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		00C55DDA1F915EAA8F91DC3F /* EmptyStateView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EmptyStateView.swift; sourceTree = "<group>"; };
+		11A8E564C93E2C75318A2AE1 /* CompressView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressView.swift; sourceTree = "<group>"; };
+		13386A1A8D2E9F1EC1B4A9F7 /* Anime4K_Restore_CNN_VL.glsl */ = {isa = PBXFileReference; path = Anime4K_Restore_CNN_VL.glsl; sourceTree = "<group>"; };
+		1A40B8703B26D3FDCCDE88C6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		1F5548C5F7ADD7830955545E /* Anime4K_Restore_CNN_Soft_M.glsl */ = {isa = PBXFileReference; path = Anime4K_Restore_CNN_Soft_M.glsl; sourceTree = "<group>"; };
+		204D70DD65E7D8E6BE7CDFA7 /* Anime4K_Restore_CNN_M.glsl */ = {isa = PBXFileReference; path = Anime4K_Restore_CNN_M.glsl; sourceTree = "<group>"; };
+		2410F849A2FDFE49901C566A /* UpscaleView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UpscaleView.swift; sourceTree = "<group>"; };
+		286C375B47DB82B67FE79854 /* ConfigurationPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ConfigurationPanel.swift; sourceTree = "<group>"; };
+		2B451A10A73C09267FEF3CFB /* Anime4K_Clamp_Highlights.glsl */ = {isa = PBXFileReference; path = Anime4K_Clamp_Highlights.glsl; sourceTree = "<group>"; };
+		37A190853E217F152BE9419B /* Anime4K_Restore_CNN_Soft_S.glsl */ = {isa = PBXFileReference; path = Anime4K_Restore_CNN_Soft_S.glsl; sourceTree = "<group>"; };
+		38138333557AC2F3410306AE /* Anime4K_Upscale_Denoise_CNN_x2_M.glsl */ = {isa = PBXFileReference; path = Anime4K_Upscale_Denoise_CNN_x2_M.glsl; sourceTree = "<group>"; };
+		3BC0F57BB1249B7DC5DA8793 /* FFmpegLocator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FFmpegLocator.swift; sourceTree = "<group>"; };
+		4D962A2B6F5F4A2D8AD5061B /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		5312DA1883BAA4EEF9B2C6C3 /* CompressViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressViewModel.swift; sourceTree = "<group>"; };
+		542237CADE805C5DB420E832 /* DurationProbe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DurationProbe.swift; sourceTree = "<group>"; };
+		58DFA224F4183EBBD5C3425E /* StreamOptimizeModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamOptimizeModels.swift; sourceTree = "<group>"; };
+		58E74D70C89A23D4AFCA40BE /* Anime4K-Upscaler.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Anime4K-Upscaler.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		670F2DCCD6218A17FFD998CF /* Anime4K_UpscalerApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Anime4K_UpscalerApp.swift; sourceTree = "<group>"; };
+		68A505F720355F3A65A0B09B /* Anime4K_Upscale_CNN_x2_S.glsl */ = {isa = PBXFileReference; path = Anime4K_Upscale_CNN_x2_S.glsl; sourceTree = "<group>"; };
+		6ABD734EE699E0C5815EB015 /* ProcessingEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingEngine.swift; sourceTree = "<group>"; };
+		7633285AE9CBEB9D11831510 /* Anime4K_Restore_CNN_Soft_VL.glsl */ = {isa = PBXFileReference; path = Anime4K_Restore_CNN_Soft_VL.glsl; sourceTree = "<group>"; };
+		777B1166CCE228F09C178993 /* Anime4K_Restore_CNN_S.glsl */ = {isa = PBXFileReference; path = Anime4K_Restore_CNN_S.glsl; sourceTree = "<group>"; };
+		956A89DCC7E0B27A0E223938 /* Anime4K_Upscale_CNN_x2_M.glsl */ = {isa = PBXFileReference; path = Anime4K_Upscale_CNN_x2_M.glsl; sourceTree = "<group>"; };
+		9B323107B0B004C2901C8369 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl */ = {isa = PBXFileReference; path = Anime4K_Upscale_Denoise_CNN_x2_VL.glsl; sourceTree = "<group>"; };
+		A0C53583933AE8354D6DF90F /* SecurityScopeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopeManager.swift; sourceTree = "<group>"; };
+		A19063BF4FF89203EC323802 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		B78F5D3177A0DDFB81491BE7 /* StreamOptimizeViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamOptimizeViewModel.swift; sourceTree = "<group>"; };
+		BA65557BF36E55224D10E8A3 /* FileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileListView.swift; sourceTree = "<group>"; };
+		CA6D8287A51700AD60CE6C09 /* ProgressRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressRow.swift; sourceTree = "<group>"; };
+		D4E7851AE8603F684A5F07AA /* ProcessingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingView.swift; sourceTree = "<group>"; };
+		E20EB53AC70827683E15997E /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
+		ED2AE055F7444879407DF2E1 /* ModePicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ModePicker.swift; sourceTree = "<group>"; };
+		F30407CF81F8DA05FA361E01 /* Anime4K_Upscale_CNN_x2_VL.glsl */ = {isa = PBXFileReference; path = Anime4K_Upscale_CNN_x2_VL.glsl; sourceTree = "<group>"; };
+		F9065731947AE4E7B3CC172A /* StreamOptimizeView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StreamOptimizeView.swift; sourceTree = "<group>"; };
+		FCC63021CDE4479CB5D16BB0 /* CompressModels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CompressModels.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		0BEA93A88E3229ED7D58A1E6 /* Utilities */ = {
+			isa = PBXGroup;
+			children = (
+				542237CADE805C5DB420E832 /* DurationProbe.swift */,
+				3BC0F57BB1249B7DC5DA8793 /* FFmpegLocator.swift */,
+				A0C53583933AE8354D6DF90F /* SecurityScopeManager.swift */,
+			);
+			path = Utilities;
+			sourceTree = "<group>";
+		};
+		156437D7D09397E0D3299677 /* Views */ = {
+			isa = PBXGroup;
+			children = (
+				52450DB333DA5A2BA3CAEEB9 /* Components */,
+				854CD1B655FBC93612C07FC1 /* Compress */,
+				E6040C72CE8AC4CAC5D9A0D2 /* Detail */,
+				868AECC6A5F65BB6760A6314 /* Sidebar */,
+				8F602E890C501B3FA5457FDB /* StreamOptimize */,
+				1A40B8703B26D3FDCCDE88C6 /* ContentView.swift */,
+				2410F849A2FDFE49901C566A /* UpscaleView.swift */,
+			);
+			path = Views;
+			sourceTree = "<group>";
+		};
+		30BB78B46C3FC0F20FA9ABE4 /* Anime4K-Upscaler */ = {
+			isa = PBXGroup;
+			children = (
+				A8147C0DB1FDC2FA260C8308 /* Models */,
+				388BD0FB621A48ED96C2CDF1 /* Resources */,
+				0BEA93A88E3229ED7D58A1E6 /* Utilities */,
+				89189A803E2C9A2FA7ED5256 /* ViewModels */,
+				156437D7D09397E0D3299677 /* Views */,
+				670F2DCCD6218A17FFD998CF /* Anime4K_UpscalerApp.swift */,
+			);
+			path = "Anime4K-Upscaler";
+			sourceTree = "<group>";
+		};
+		388BD0FB621A48ED96C2CDF1 /* Resources */ = {
+			isa = PBXGroup;
+			children = (
+				CEC7B0C2832E3DDC73AF0BCB /* Shaders */,
+				4D962A2B6F5F4A2D8AD5061B /* Assets.xcassets */,
+			);
+			path = Resources;
+			sourceTree = "<group>";
+		};
+		52450DB333DA5A2BA3CAEEB9 /* Components */ = {
+			isa = PBXGroup;
+			children = (
+				ED2AE055F7444879407DF2E1 /* ModePicker.swift */,
+				CA6D8287A51700AD60CE6C09 /* ProgressRow.swift */,
+			);
+			path = Components;
+			sourceTree = "<group>";
+		};
+		854CD1B655FBC93612C07FC1 /* Compress */ = {
+			isa = PBXGroup;
+			children = (
+				11A8E564C93E2C75318A2AE1 /* CompressView.swift */,
+			);
+			path = Compress;
+			sourceTree = "<group>";
+		};
+		868AECC6A5F65BB6760A6314 /* Sidebar */ = {
+			isa = PBXGroup;
+			children = (
+				BA65557BF36E55224D10E8A3 /* FileListView.swift */,
+			);
+			path = Sidebar;
+			sourceTree = "<group>";
+		};
+		89189A803E2C9A2FA7ED5256 /* ViewModels */ = {
+			isa = PBXGroup;
+			children = (
+				E20EB53AC70827683E15997E /* AppViewModel.swift */,
+				5312DA1883BAA4EEF9B2C6C3 /* CompressViewModel.swift */,
+				6ABD734EE699E0C5815EB015 /* ProcessingEngine.swift */,
+				B78F5D3177A0DDFB81491BE7 /* StreamOptimizeViewModel.swift */,
+			);
+			path = ViewModels;
+			sourceTree = "<group>";
+		};
+		8F602E890C501B3FA5457FDB /* StreamOptimize */ = {
+			isa = PBXGroup;
+			children = (
+				F9065731947AE4E7B3CC172A /* StreamOptimizeView.swift */,
+			);
+			path = StreamOptimize;
+			sourceTree = "<group>";
+		};
+		A8147C0DB1FDC2FA260C8308 /* Models */ = {
+			isa = PBXGroup;
+			children = (
+				FCC63021CDE4479CB5D16BB0 /* CompressModels.swift */,
+				A19063BF4FF89203EC323802 /* Models.swift */,
+				58DFA224F4183EBBD5C3425E /* StreamOptimizeModels.swift */,
+			);
+			path = Models;
+			sourceTree = "<group>";
+		};
+		CEC7B0C2832E3DDC73AF0BCB /* Shaders */ = {
+			isa = PBXGroup;
+			children = (
+				2B451A10A73C09267FEF3CFB /* Anime4K_Clamp_Highlights.glsl */,
+				204D70DD65E7D8E6BE7CDFA7 /* Anime4K_Restore_CNN_M.glsl */,
+				777B1166CCE228F09C178993 /* Anime4K_Restore_CNN_S.glsl */,
+				1F5548C5F7ADD7830955545E /* Anime4K_Restore_CNN_Soft_M.glsl */,
+				37A190853E217F152BE9419B /* Anime4K_Restore_CNN_Soft_S.glsl */,
+				7633285AE9CBEB9D11831510 /* Anime4K_Restore_CNN_Soft_VL.glsl */,
+				13386A1A8D2E9F1EC1B4A9F7 /* Anime4K_Restore_CNN_VL.glsl */,
+				956A89DCC7E0B27A0E223938 /* Anime4K_Upscale_CNN_x2_M.glsl */,
+				68A505F720355F3A65A0B09B /* Anime4K_Upscale_CNN_x2_S.glsl */,
+				F30407CF81F8DA05FA361E01 /* Anime4K_Upscale_CNN_x2_VL.glsl */,
+				38138333557AC2F3410306AE /* Anime4K_Upscale_Denoise_CNN_x2_M.glsl */,
+				9B323107B0B004C2901C8369 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl */,
+			);
+			path = Shaders;
+			sourceTree = "<group>";
+		};
+		D7F46DB90F7DCC003C7B6F4F /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				58E74D70C89A23D4AFCA40BE /* Anime4K-Upscaler.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		E6040C72CE8AC4CAC5D9A0D2 /* Detail */ = {
+			isa = PBXGroup;
+			children = (
+				286C375B47DB82B67FE79854 /* ConfigurationPanel.swift */,
+				00C55DDA1F915EAA8F91DC3F /* EmptyStateView.swift */,
+				D4E7851AE8603F684A5F07AA /* ProcessingView.swift */,
+			);
+			path = Detail;
+			sourceTree = "<group>";
+		};
+		E9958930E8BDE36D4369693B = {
+			isa = PBXGroup;
+			children = (
+				30BB78B46C3FC0F20FA9ABE4 /* Anime4K-Upscaler */,
+				D7F46DB90F7DCC003C7B6F4F /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1CC2151BA215CB9D5697DD98 /* Anime4K-Upscaler */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A11EB6049E5662A06C184082 /* Build configuration list for PBXNativeTarget "Anime4K-Upscaler" */;
+			buildPhases = (
+				A57C0835837DE8C4F42B6F0F /* Sources */,
+				F3FDC656AFE5EB5AD564345B /* Resources */,
+				E6195DBDC2A9CBC53F900919 /* Bundle FFmpeg & Dependencies */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = "Anime4K-Upscaler";
+			packageProductDependencies = (
+			);
+			productName = "Anime4K-Upscaler";
+			productReference = 58E74D70C89A23D4AFCA40BE /* Anime4K-Upscaler.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		411F3EFCB1084749A701555C /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1500;
+				TargetAttributes = {
+					1CC2151BA215CB9D5697DD98 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = E0C16205D8BAC804ED42DDCB /* Build configuration list for PBXProject "Anime4K-Upscaler" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = E9958930E8BDE36D4369693B;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				1CC2151BA215CB9D5697DD98 /* Anime4K-Upscaler */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		F3FDC656AFE5EB5AD564345B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				F9251B71ED8B7AA517694EBA /* Anime4K_Clamp_Highlights.glsl in Resources */,
+				ED57814D05E8071A856CCB17 /* Anime4K_Restore_CNN_M.glsl in Resources */,
+				2FE15FAEAF8C91BE64BC90D0 /* Anime4K_Restore_CNN_S.glsl in Resources */,
+				4384BA35284326BCE52FB91E /* Anime4K_Restore_CNN_Soft_M.glsl in Resources */,
+				E90E9BE7D366AD255A2C0519 /* Anime4K_Restore_CNN_Soft_S.glsl in Resources */,
+				661FBB96FFA9E8A0B47AAEBC /* Anime4K_Restore_CNN_Soft_VL.glsl in Resources */,
+				C0374F025116D3C9E5BC10A5 /* Anime4K_Restore_CNN_VL.glsl in Resources */,
+				2A96F151630110AE6ED4B96E /* Anime4K_Upscale_CNN_x2_M.glsl in Resources */,
+				B44CB7DC810842656F41CB53 /* Anime4K_Upscale_CNN_x2_S.glsl in Resources */,
+				7B7728604A3D0C3E99731E3E /* Anime4K_Upscale_CNN_x2_VL.glsl in Resources */,
+				90D33D19D2D6C4AED02F8DE2 /* Anime4K_Upscale_Denoise_CNN_x2_M.glsl in Resources */,
+				587EE35E38AF6AD6114C8484 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl in Resources */,
+				F17BC2B90A3BF8D77B91C430 /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		E6195DBDC2A9CBC53F900919 /* Bundle FFmpeg & Dependencies */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Bundle FFmpeg & Dependencies";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/zsh;
+			shellScript = "\"${SRCROOT}/Anime4K-Upscaler/Scripts/bundle_dependencies.sh\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A57C0835837DE8C4F42B6F0F /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CADBC497E4C2CB21ED05DA09 /* Anime4K_UpscalerApp.swift in Sources */,
+				9112F6E855D39657DEAA1CCE /* AppViewModel.swift in Sources */,
+				D0FE1DA303C729F4266886E1 /* CompressModels.swift in Sources */,
+				AAB069C019C50ABACB9D277F /* CompressView.swift in Sources */,
+				66F50577A04816CF6AEB1E4A /* CompressViewModel.swift in Sources */,
+				C1921FB64741D7AEB25E5A1A /* ConfigurationPanel.swift in Sources */,
+				74458BAFC68984A77511814B /* ContentView.swift in Sources */,
+				DFD4850FD14FE48F3ED2380C /* DurationProbe.swift in Sources */,
+				7B2FF9C9707B08F65E8D341E /* EmptyStateView.swift in Sources */,
+				FEAFE900249F29CC1A61D609 /* FFmpegLocator.swift in Sources */,
+				9E8FB06CB3822A6A649D1825 /* FileListView.swift in Sources */,
+				2D1E3EDE94CC68E00CFE3979 /* ModePicker.swift in Sources */,
+				3DFC521C94DE2D4097CCB5BB /* Models.swift in Sources */,
+				D6DE73B0AFD776AF1173CFA9 /* ProcessingEngine.swift in Sources */,
+				48523504D7521577DCB48B67 /* ProcessingView.swift in Sources */,
+				122931FF1604D6B0667FAE20 /* ProgressRow.swift in Sources */,
+				A907FE0561EE6303348C7D99 /* SecurityScopeManager.swift in Sources */,
+				4DA7B842A03594651151DC49 /* StreamOptimizeModels.swift in Sources */,
+				9D7AA03BA6CEB87009AB064D /* StreamOptimizeView.swift in Sources */,
+				661B50E3876C482F113BF492 /* StreamOptimizeViewModel.swift in Sources */,
+				4CE7E1BAEDEF542413E5B9AA /* UpscaleView.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		19BE221999ED47E230D6DB16 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "Anime4K Upscaler";
+				SDKROOT = macosx;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Debug;
+		};
+		44ED7BA62BD66F082571B498 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "Anime4K-Upscaler/Anime4K_Upscaler.entitlements";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_CFBundleDisplayName = "Anime4K Upscaler";
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.anime4k.upscaler;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Debug;
+		};
+		57D2089D27B5881568799EEE /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = "Anime4K-Upscaler/Anime4K_Upscaler.entitlements";
+				COMBINE_HIDPI_IMAGES = YES;
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_GENERATION_MODE = GeneratedFile;
+				INFOPLIST_KEY_CFBundleDisplayName = "Anime4K Upscaler";
+				INFOPLIST_KEY_CFBundleIconName = AppIcon;
+				INFOPLIST_KEY_LSApplicationCategoryType = "public.app-category.video";
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.anime4k.upscaler;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+			};
+			name = Release;
+		};
+		69A66D75B1D435335C5994C6 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Automatic;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_HARDENED_RUNTIME = YES;
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "Anime4K Upscaler";
+				SDKROOT = macosx;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.9;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A11EB6049E5662A06C184082 /* Build configuration list for PBXNativeTarget "Anime4K-Upscaler" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				44ED7BA62BD66F082571B498 /* Debug */,
+				57D2089D27B5881568799EEE /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E0C16205D8BAC804ED42DDCB /* Build configuration list for PBXProject "Anime4K-Upscaler" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				19BE221999ED47E230D6DB16 /* Debug */,
+				69A66D75B1D435335C5994C6 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 411F3EFCB1084749A701555C /* Project object */;
+}
