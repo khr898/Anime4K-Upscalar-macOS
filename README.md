@@ -62,6 +62,7 @@ The project uses a `project.yml` file for project generation. You will also need
 This project is a graphical user interface for the open-source Anime4K algorithm.
 
 - **Anime4K:** The core algorithms are from the [Anime4K project by bloc97](https://github.com/bloc97/Anime4K/).
+- **FFmpeg:** Used for all video processing tasks. See the [FFmpeg website](https://ffmpeg.org/) for more information.
 
 ---
 
