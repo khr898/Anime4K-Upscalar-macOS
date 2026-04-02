@@ -25,6 +25,11 @@ enum Anime4KShader: String, CaseIterable, Identifiable, Sendable {
 
     var id: String { rawValue }
 
+    /// Metal shader basename (without extension), matching translated .metal files.
+    var metalSourceBaseName: String {
+        rawValue.replacingOccurrences(of: ".glsl", with: "")
+    }
+
     /// Whether this shader performs spatial upscaling (doubles resolution).
     var isUpscaler: Bool {
         switch self {
@@ -230,6 +235,48 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
                 .restoreCNN_M
             ]
         }
+    }
+}
+
+// MARK: - Resolved Shader Chain
+
+extension Anime4KMode {
+    /// Resolves the effective shader chain for the requested output scale.
+    ///
+    /// This preserves the same upscaler gating behavior used by the legacy
+    /// libplacebo/GLSL path: each 2x pass is only included while currentScale
+    /// is below the requested scale.
+    func resolvedShaders(for resolution: TargetResolution) -> [Anime4KShader] {
+        var selected: [Anime4KShader] = []
+        var currentScale = 1
+
+        for shader in shaders {
+            if shader.isUpscaler {
+                if currentScale < resolution.scaleFactor {
+                    selected.append(shader)
+                    currentScale *= 2
+                }
+            } else {
+                selected.append(shader)
+            }
+        }
+
+        return selected
+    }
+
+    /// Effective output scale after resolving the chain.
+    func resolvedScaleFactor(for resolution: TargetResolution) -> Int {
+        var scale = 1
+        for shader in resolvedShaders(for: resolution) where shader.isUpscaler {
+            _ = shader
+            scale *= 2
+        }
+        return scale
+    }
+
+    /// Resolved Metal source basenames (without extension).
+    func resolvedMetalShaderSources(for resolution: TargetResolution) -> [String] {
+        resolvedShaders(for: resolution).map(\.metalSourceBaseName)
     }
 }
 

@@ -9,9 +9,16 @@ set -euo pipefail
 FRAMEWORKS_DIR="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
 SHADERS_SRC="${SRCROOT}/Anime4K-Upscaler/Resources/Shaders"
+METAL_SOURCES_DEST="${RESOURCES_DIR}/metal_sources"
+
+METAL_SOURCE_CANDIDATES=(
+    "${SRCROOT}/Anime4K-Upscaler/Resources/metal_sources"
+    "${SRCROOT}/Resources/metal_sources"
+)
 
 mkdir -p "${FRAMEWORKS_DIR}"
 mkdir -p "${RESOURCES_DIR}/Shaders"
+mkdir -p "${METAL_SOURCES_DEST}"
 
 # --- 1. LOCATE FFMPEG & FFPROBE ---
 FFMPEG_BIN=$(which ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
@@ -29,6 +36,17 @@ fi
 
 echo "📦 Bundling ffmpeg from: $FFMPEG_BIN"
 echo "📦 Bundling ffprobe from: $FFPROBE_BIN"
+
+# --- Optional libplacebo probe (informational only) ---
+echo "🔍 Probing libplacebo availability (informational)..."
+LP_PROBE_OUTPUT=$("$FFMPEG_BIN" -hide_banner -v verbose -f lavfi -i color=size=16x16:rate=1:color=black -vf libplacebo -frames:v 1 -f null - 2>&1 || true)
+LP_VERSION=$(echo "$LP_PROBE_OUTPUT" | sed -nE 's/.*libplacebo[[:space:]]+v?([0-9]+\.[0-9]+(\.[0-9]+)?).*/\1/p' | head -n1)
+
+if [[ -n "$LP_VERSION" ]]; then
+    echo "ℹ️  libplacebo runtime version detected: $LP_VERSION"
+else
+    echo "ℹ️  libplacebo not detected in ffmpeg runtime output (OK for Metal pipeline)"
+fi
 
 # --- 2. COPY BINARIES ---
 cp -f "$FFMPEG_BIN" "${FRAMEWORKS_DIR}/ffmpeg"
@@ -235,6 +253,22 @@ else
     echo "warning: Shader directory not found at ${SHADERS_SRC}"
 fi
 
+# --- 6b. COPY TRANSLATED METAL SOURCES ---
+METAL_SRC_DIR=""
+for candidate in "${METAL_SOURCE_CANDIDATES[@]}"; do
+    if [[ -d "$candidate" ]]; then
+        METAL_SRC_DIR="$candidate"
+        break
+    fi
+done
+
+if [[ -n "$METAL_SRC_DIR" ]]; then
+    echo "📦 Copying translated .metal sources from: $METAL_SRC_DIR"
+    cp -f "${METAL_SRC_DIR}"/Anime4K_*.metal "${METAL_SOURCES_DEST}/" 2>/dev/null || echo "warning: No Anime4K_*.metal files found in ${METAL_SRC_DIR}"
+else
+    echo "warning: Could not locate translated .metal source directory"
+fi
+
 # --- 7. CODESIGN EVERYTHING ---
 echo "🔏 Codesigning all bundled binaries and dylibs..."
 for item in "${FRAMEWORKS_DIR}/ffmpeg" "${FRAMEWORKS_DIR}/ffprobe" "${FRAMEWORKS_DIR}"/*.dylib; do
@@ -247,3 +281,4 @@ echo ""
 echo "✅ Dependency bundling complete."
 echo "   Frameworks: $(ls "${FRAMEWORKS_DIR}" | wc -l | tr -d ' ') items"
 echo "   Shaders:    $(ls "${RESOURCES_DIR}/Shaders/"*.glsl 2>/dev/null | wc -l | tr -d ' ') files"
+echo "   Metal src:  $(ls "${METAL_SOURCES_DEST}/"*.metal 2>/dev/null | wc -l | tr -d ' ') files"
