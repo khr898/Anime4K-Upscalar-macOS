@@ -5,6 +5,7 @@ import Foundation
 import IOKit.pwr_mgt
 import Observation
 import Metal
+import AVFoundation
 import CoreML
 import Vision
 import CoreGraphics
@@ -36,6 +37,37 @@ final class ProcessingEngine {
 
     /// Recommended in-flight worker hint when ANE is available.
     private static let neuralWorkerHint: Int = 3
+    /// Hard cap to bound memory pressure while still allowing strong parallelism.
+    private static let maxWorkerCount: Int = 8
+    /// Hard cap for queued frames waiting on worker/GPU completion.
+    private static let maxPipelineDepth: Int = 16
+
+    private enum DecodeBackend {
+        case ffmpeg
+        case videoToolbox
+
+        var logTag: String {
+            switch self {
+            case .ffmpeg:
+                return "ffmpeg"
+            case .videoToolbox:
+                return "videotoolbox"
+            }
+        }
+    }
+
+    private enum DecodedFrame {
+        case bytes(Data)
+        case pixelBuffer(DecodedPixelBuffer)
+    }
+
+    private final class DecodedPixelBuffer: @unchecked Sendable {
+        let value: CVPixelBuffer
+
+        init(_ value: CVPixelBuffer) {
+            self.value = value
+        }
+    }
 
     // MARK: - Process Execution
 
@@ -116,19 +148,42 @@ final class ProcessingEngine {
         let targetOutputWidth = max(1, streamInfo.width * effectiveScale)
         let targetOutputHeight = max(1, streamInfo.height * effectiveScale)
 
-        let requestedBackend = A4KComputeBackend.resolve(from: ProcessInfo.processInfo.environment)
+        let environment = ProcessInfo.processInfo.environment
+        let requestedBackend = A4KComputeBackend.resolve(from: environment)
+        let preferredDecodeBackend = Self.resolveDecodeBackend(environment: environment)
+        let neuralAssistEnabled = environment["A4K_ENABLE_NEURAL_ASSIST"] != "0"
+        let neuralStatus = neuralAssistEnabled
+            ? Self.neuralAssistStatus()
+            : (hasNeuralEngine: false, warmupSucceeded: false)
+        let inflightWorkers = Self.resolveInflightWorkers(
+            environment: environment,
+            backend: requestedBackend,
+            neuralAssistEnabled: neuralAssistEnabled && neuralStatus.hasNeuralEngine
+        )
+        let pipelineQueueDepth = Self.resolvePipelineQueueDepth(
+            environment: environment,
+            workerCount: inflightWorkers
+        )
 
-        let processor: Anime4KOfflineProcessor
+        let processors: [Anime4KOfflineProcessor]
         do {
-            processor = try Anime4KOfflineProcessor(
-                shaderFileNames: shaderFiles,
-                targetOutputScale: Float(effectiveScale),
-                metalSourceDirectoryPath: metalSourceDir,
-                computeBackend: requestedBackend
-            )
+            processors = try (0..<inflightWorkers).map { _ in
+                try Anime4KOfflineProcessor(
+                    shaderFileNames: shaderFiles,
+                    targetOutputScale: Float(effectiveScale),
+                    metalSourceDirectoryPath: metalSourceDir,
+                    computeBackend: requestedBackend
+                )
+            }
         } catch {
             job.state = .failed
             job.errorMessage = error.localizedDescription
+            return
+        }
+
+        guard let leadProcessor = processors.first else {
+            job.state = .failed
+            job.errorMessage = "Failed to initialize processing workers."
             return
         }
 
@@ -147,14 +202,18 @@ final class ProcessingEngine {
         job.state = .running
         job.progress = 0.0
         job.startDate = Date()
-        job.appendLog("$ ffmpeg \(decodeArguments.joined(separator: " "))")
+        if preferredDecodeBackend == .ffmpeg {
+            job.appendLog("$ ffmpeg \(decodeArguments.joined(separator: " "))")
+        } else {
+            job.appendLog("[decode] preferred_backend=\(preferredDecodeBackend.logTag)")
+        }
         job.appendLog("$ ffmpeg \(encodeArguments.joined(separator: " "))")
-        job.appendLog("[backend] requested=\(processor.requestedBackend.rawValue) active=\(processor.activeBackend.rawValue)")
+        job.appendLog("[backend] requested=\(leadProcessor.requestedBackend.rawValue) active=\(leadProcessor.activeBackend.rawValue)")
+        job.appendLog("[pipeline] inflight_workers=\(inflightWorkers) queue_depth=\(pipelineQueueDepth)")
 
-        if ProcessInfo.processInfo.environment["A4K_ENABLE_NEURAL_ASSIST"] != "0" {
-            let neural = Self.neuralAssistStatus()
-            let engineStatus = neural.hasNeuralEngine ? "detected" : "not_detected"
-            let warmupStatus = neural.warmupSucceeded ? "ok" : "skipped_or_failed"
+        if neuralAssistEnabled {
+            let engineStatus = neuralStatus.hasNeuralEngine ? "detected" : "not_detected"
+            let warmupStatus = neuralStatus.warmupSucceeded ? "ok" : "skipped_or_failed"
             job.appendLog("[neural] engine=\(engineStatus) warmup=\(warmupStatus) worker_hint=\(Self.neuralWorkerHint)")
         }
 
@@ -162,6 +221,8 @@ final class ProcessingEngine {
         let capturedDecodeArgs = decodeArguments
         let capturedEncodeArgs = encodeArguments
         let capturedEnvironment = FFmpegLocator.processEnvironment()
+        let capturedPreferredDecodeBackend = preferredDecodeBackend
+        let capturedInputURL = job.file.url
         let inputWidth = streamInfo.width
         let inputHeight = streamInfo.height
         let outputWidth = targetOutputWidth
@@ -179,14 +240,36 @@ final class ProcessingEngine {
 
             Task.detached(priority: .userInitiated) { [weak self] in
                 let decodeProcess = Process()
-                decodeProcess.executableURL = capturedFFmpegURL
-                decodeProcess.arguments = capturedDecodeArgs
-                decodeProcess.environment = capturedEnvironment
+                var decodeProcessLaunched = false
+                var activeDecodeBackend = capturedPreferredDecodeBackend
+                var videoToolboxReader: VideoToolboxFrameReader?
+                var decodeOutputHandle: FileHandle?
+                var decodeErrHandle: FileHandle?
 
-                let decodeOutPipe = Pipe()
-                let decodeErrPipe = Pipe()
-                decodeProcess.standardOutput = decodeOutPipe
-                decodeProcess.standardError = decodeErrPipe
+                if activeDecodeBackend == .videoToolbox {
+                    do {
+                        videoToolboxReader = try VideoToolboxFrameReader(inputURL: capturedInputURL)
+                    } catch {
+                        activeDecodeBackend = .ffmpeg
+                        await MainActor.run {
+                            job.appendLog("[decode] videotoolbox unavailable (\(error.localizedDescription)); falling back to ffmpeg")
+                        }
+                    }
+                }
+
+                if activeDecodeBackend == .ffmpeg {
+                    decodeProcess.executableURL = capturedFFmpegURL
+                    decodeProcess.arguments = capturedDecodeArgs
+                    decodeProcess.environment = capturedEnvironment
+
+                    let decodeOutPipe = Pipe()
+                    let decodeErrPipe = Pipe()
+                    decodeProcess.standardOutput = decodeOutPipe
+                    decodeProcess.standardError = decodeErrPipe
+
+                    decodeOutputHandle = decodeOutPipe.fileHandleForReading
+                    decodeErrHandle = decodeErrPipe.fileHandleForReading
+                }
 
                 let encodeProcess = Process()
                 encodeProcess.executableURL = capturedFFmpegURL
@@ -198,21 +281,20 @@ final class ProcessingEngine {
                 encodeProcess.standardInput = encodeInPipe
                 encodeProcess.standardError = encodeErrPipe
 
-                let decodeErrHandle = decodeErrPipe.fileHandleForReading
                 let encodeErrHandle = encodeErrPipe.fileHandleForReading
-                let decodeOutputHandle = decodeOutPipe.fileHandleForReading
                 let encodeInputHandle = encodeInPipe.fileHandleForWriting
 
                 func cleanupPipes() {
-                    decodeErrHandle.readabilityHandler = nil
+                    decodeErrHandle?.readabilityHandler = nil
                     encodeErrHandle.readabilityHandler = nil
-                    try? decodeErrHandle.close()
+                    try? decodeErrHandle?.close()
                     try? encodeErrHandle.close()
-                    try? decodeOutputHandle.close()
+                    try? decodeOutputHandle?.close()
                     try? encodeInputHandle.close()
+                    videoToolboxReader = nil
                 }
 
-                decodeErrHandle.readabilityHandler = { handle in
+                decodeErrHandle?.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty,
                           let text = String(data: data, encoding: .utf8) else { return }
@@ -240,7 +322,11 @@ final class ProcessingEngine {
 
                 do {
                     try encodeProcess.run()
-                    try decodeProcess.run()
+
+                    if activeDecodeBackend == .ffmpeg {
+                        try decodeProcess.run()
+                        decodeProcessLaunched = true
+                    }
                 } catch {
                     cleanupPipes()
                     await MainActor.run { [weak self] in
@@ -257,86 +343,201 @@ final class ProcessingEngine {
                 }
 
                 await MainActor.run { [weak self] in
-                    self?.currentDecodeProcess = decodeProcess
+                    self?.currentDecodeProcess = decodeProcessLaunched ? decodeProcess : nil
                     self?.currentEncodeProcess = encodeProcess
                     job.processHandle = encodeProcess
+                    job.appendLog("[decode] active_backend=\(activeDecodeBackend.logTag)")
                 }
 
                 let inputFrameBytes = inputWidth * inputHeight * 4
-                var outputFrameData = Data(count: max(1, outputWidth * outputHeight * 4))
+                let outputFrameBytes = max(1, outputWidth * outputHeight * 4)
                 let wallStart = Date()
                 var lastUIUpdate = wallStart
-                var frameIndex = 0
+
+                let workerCount = max(1, processors.count)
+                let workerQueues = (0..<workerCount).map { workerIndex in
+                    DispatchQueue(label: "a4k.export.worker.\(workerIndex)", qos: .userInitiated)
+                }
+
+                let writerQueue = DispatchQueue(label: "a4k.export.writer")
+                let inflightSemaphore = DispatchSemaphore(value: max(workerCount, pipelineQueueDepth))
+                let processingGroup = DispatchGroup()
+                let stateLock = NSLock()
+
+                var pendingOutputs: [Int: Data] = [:]
+                var nextWriteIndex = 0
+                var producedFrameCount = 0
+                var encodedFrameCount = 0
                 var processingError: String?
+
+                func setProcessingErrorIfNeeded(_ message: String) {
+                    stateLock.lock()
+                    if processingError == nil {
+                        processingError = message
+                    }
+                    stateLock.unlock()
+                }
+
+                func hasProcessingError() -> Bool {
+                    stateLock.lock()
+                    let hasError = processingError != nil
+                    stateLock.unlock()
+                    return hasError
+                }
 
                 while true {
                     let shouldCancel = await MainActor.run { [weak self] in
                         self?.cancellationRequested ?? true
                     }
-                    if shouldCancel { break }
-
-                    let frameData: Data?
-                    do {
-                        frameData = try Self.readExactly(handle: decodeOutputHandle, byteCount: inputFrameBytes)
-                    } catch {
-                        processingError = "Failed reading decoded frame stream: \(error.localizedDescription)"
+                    if shouldCancel || hasProcessingError() {
                         break
                     }
 
-                    guard let frameData else { break }
-                    if frameData.count != inputFrameBytes {
-                        processingError = "Truncated frame from decoder (got \(frameData.count), expected \(inputFrameBytes))."
+                    inflightSemaphore.wait()
+
+                    if hasProcessingError() {
+                        inflightSemaphore.signal()
                         break
                     }
 
+                    let decodedFrame: DecodedFrame?
                     do {
-                        let dims = try processor.processFrame(
-                            inputFrame: frameData,
-                            inputWidth: inputWidth,
-                            inputHeight: inputHeight,
-                            nativeWidth: inputWidth,
-                            nativeHeight: inputHeight,
-                            targetOutputWidth: outputWidth,
-                            targetOutputHeight: outputHeight,
-                            outputFrame: &outputFrameData
-                        )
+                        if activeDecodeBackend == .videoToolbox {
+                            if let pixelBuffer = videoToolboxReader?.nextFrame() {
+                                decodedFrame = .pixelBuffer(DecodedPixelBuffer(pixelBuffer))
+                            } else {
+                                decodedFrame = nil
+                            }
+                        } else {
+                            guard let decodeOutputHandle else {
+                                throw NSError(
+                                    domain: "Anime4K.Decode",
+                                    code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "Decoder output stream is unavailable"]
+                                )
+                            }
 
-                        if dims.width != outputWidth || dims.height != outputHeight {
-                            processingError = "Unexpected Metal output dimensions \(dims.width)x\(dims.height); expected \(outputWidth)x\(outputHeight)."
-                            break
+                            let frameData = try Self.readExactly(handle: decodeOutputHandle, byteCount: inputFrameBytes)
+                            if let frameData, frameData.count != inputFrameBytes {
+                                inflightSemaphore.signal()
+                                setProcessingErrorIfNeeded("Truncated frame from decoder (got \(frameData.count), expected \(inputFrameBytes)).")
+                                break
+                            }
+                            decodedFrame = frameData.map { .bytes($0) }
                         }
                     } catch {
-                        processingError = "Metal frame processing failed: \(error.localizedDescription)"
+                        inflightSemaphore.signal()
+                        setProcessingErrorIfNeeded("Failed reading decoded frame stream: \(error.localizedDescription)")
                         break
                     }
 
-                    do {
-                        try encodeInputHandle.write(contentsOf: outputFrameData)
-                    } catch {
-                        processingError = "Failed writing encoded frame stream: \(error.localizedDescription)"
+                    guard let decodedFrame else {
+                        inflightSemaphore.signal()
                         break
                     }
 
-                    frameIndex += 1
-                    let now = Date()
-                    if now.timeIntervalSince(lastUIUpdate) >= throttleSeconds {
-                        let elapsed = max(now.timeIntervalSince(wallStart), 0.001)
-                        let processedSeconds = Double(frameIndex) / fps
-                        let progress = totalDuration > 0 ? min(processedSeconds / totalDuration, 1.0) : 0.0
-                        let speed = processedSeconds / elapsed
-                        let realtimeFPS = Double(frameIndex) / elapsed
-                        let ffmpegTime = Self.formatFFmpegTime(seconds: processedSeconds)
-                        lastUIUpdate = now
+                    let frameOrdinal = producedFrameCount
+                    producedFrameCount += 1
+                    let workerIndex = frameOrdinal % workerCount
 
-                        await MainActor.run {
-                            job.currentFrame = frameIndex
-                            job.currentTime = ffmpegTime
-                            job.progress = progress
-                            job.speed = String(format: "%.2fx", speed)
-                            job.fps = String(format: "%.1f", realtimeFPS)
+                    processingGroup.enter()
+                    workerQueues[workerIndex].async {
+                        defer {
+                            inflightSemaphore.signal()
+                            processingGroup.leave()
+                        }
+
+                        if hasProcessingError() {
+                            return
+                        }
+
+                        var outputFrameData = Data(count: outputFrameBytes)
+
+                        do {
+                            let dims: (width: Int, height: Int)
+
+                            switch decodedFrame {
+                            case let .bytes(frameData):
+                                dims = try processors[workerIndex].processFrame(
+                                    inputFrame: frameData,
+                                    inputWidth: inputWidth,
+                                    inputHeight: inputHeight,
+                                    nativeWidth: inputWidth,
+                                    nativeHeight: inputHeight,
+                                    targetOutputWidth: outputWidth,
+                                    targetOutputHeight: outputHeight,
+                                    outputFrame: &outputFrameData
+                                )
+
+                            case let .pixelBuffer(pixelBuffer):
+                                dims = try processors[workerIndex].processPixelBuffer(
+                                    pixelBuffer: pixelBuffer.value,
+                                    nativeWidth: inputWidth,
+                                    nativeHeight: inputHeight,
+                                    targetOutputWidth: outputWidth,
+                                    targetOutputHeight: outputHeight,
+                                    outputFrame: &outputFrameData
+                                )
+                            }
+
+                            if dims.width != outputWidth || dims.height != outputHeight {
+                                setProcessingErrorIfNeeded(
+                                    "Unexpected Metal output dimensions \(dims.width)x\(dims.height); expected \(outputWidth)x\(outputHeight)."
+                                )
+                                return
+                            }
+                        } catch {
+                            setProcessingErrorIfNeeded("Metal frame processing failed: \(error.localizedDescription)")
+                            return
+                        }
+
+                        writerQueue.sync {
+                            if hasProcessingError() {
+                                return
+                            }
+
+                            pendingOutputs[frameOrdinal] = outputFrameData
+
+                            while let nextFrame = pendingOutputs.removeValue(forKey: nextWriteIndex) {
+                                do {
+                                    try encodeInputHandle.write(contentsOf: nextFrame)
+                                } catch {
+                                    setProcessingErrorIfNeeded("Failed writing encoded frame stream: \(error.localizedDescription)")
+                                    return
+                                }
+
+                                encodedFrameCount += 1
+                                nextWriteIndex += 1
+
+                                let now = Date()
+                                if now.timeIntervalSince(lastUIUpdate) >= throttleSeconds {
+                                    let elapsed = max(now.timeIntervalSince(wallStart), 0.001)
+                                    let processedSeconds = Double(encodedFrameCount) / fps
+                                    let progress = totalDuration > 0 ? min(processedSeconds / totalDuration, 1.0) : 0.0
+                                    let speed = processedSeconds / elapsed
+                                    let realtimeFPS = Double(encodedFrameCount) / elapsed
+                                    let ffmpegTime = Self.formatFFmpegTime(seconds: processedSeconds)
+                                    lastUIUpdate = now
+
+                                    Task { @MainActor in
+                                        job.currentFrame = encodedFrameCount
+                                        job.currentTime = ffmpegTime
+                                        job.progress = progress
+                                        job.speed = String(format: "%.2fx", speed)
+                                        job.fps = String(format: "%.1f", realtimeFPS)
+                                    }
+                                }
+                            }
                         }
                     }
                 }
+
+                processingGroup.wait()
+                writerQueue.sync { }
+
+                stateLock.lock()
+                let finalProcessingError = processingError
+                stateLock.unlock()
 
                 try? encodeInputHandle.close()
 
@@ -344,12 +545,16 @@ final class ProcessingEngine {
                     self?.cancellationRequested ?? true
                 }
 
-                if cancelled {
-                    if decodeProcess.isRunning { decodeProcess.terminate() }
+                if cancelled || finalProcessingError != nil {
+                    if decodeProcessLaunched && decodeProcess.isRunning {
+                        decodeProcess.terminate()
+                    }
                     if encodeProcess.isRunning { encodeProcess.terminate() }
                 }
 
-                decodeProcess.waitUntilExit()
+                if decodeProcessLaunched {
+                    decodeProcess.waitUntilExit()
+                }
                 encodeProcess.waitUntilExit()
                 cleanupPipes()
 
@@ -362,16 +567,19 @@ final class ProcessingEngine {
                     if cancelled {
                         job.state = .cancelled
                         job.appendLog("[cancel] processing cancelled by user")
-                    } else if let processingError {
+                    } else if let finalProcessingError {
                         job.state = .failed
-                        job.errorMessage = processingError
-                        job.appendLog("[error] \(processingError)")
-                    } else if decodeProcess.terminationStatus == 0 && encodeProcess.terminationStatus == 0 {
+                        job.errorMessage = finalProcessingError
+                        job.appendLog("[error] \(finalProcessingError)")
+                    } else if (!decodeProcessLaunched || decodeProcess.terminationStatus == 0) && encodeProcess.terminationStatus == 0 {
                         job.state = .completed
                         job.progress = 1.0
                         job.appendLog("[done] processing completed successfully")
                     } else {
-                        let msg = "FFmpeg pipeline exited with decode=\(decodeProcess.terminationStatus), encode=\(encodeProcess.terminationStatus)"
+                        let decodeStatus = decodeProcessLaunched
+                            ? String(decodeProcess.terminationStatus)
+                            : activeDecodeBackend.logTag
+                        let msg = "Pipeline exited with decode=\(decodeStatus), encode=\(encodeProcess.terminationStatus)"
                         job.state = .failed
                         job.errorMessage = msg
                         job.appendLog("[error] \(msg)")
@@ -475,6 +683,74 @@ final class ProcessingEngine {
         }
 
         return nil
+    }
+
+    private static func resolveInflightWorkers(
+        environment: [String: String],
+        backend: A4KComputeBackend,
+        neuralAssistEnabled: Bool
+    ) -> Int {
+        if let raw = environment["A4K_INFLIGHT_WORKERS"],
+           let parsed = Int(raw) {
+            return max(1, min(maxWorkerCount, parsed))
+        }
+
+        if let raw = environment["A4K_BENCH_WORKERS"],
+           let parsed = Int(raw) {
+            return max(1, min(maxWorkerCount, parsed))
+        }
+
+        let logicalCores = max(1, ProcessInfo.processInfo.activeProcessorCount)
+        let baseWorkers = max(2, min(maxWorkerCount, logicalCores / 2))
+
+        let backendAdjusted: Int
+        switch backend {
+        case .coreML:
+            // Core ML stages can saturate ANE/GPU quickly; keep CPU fan-out modest.
+            backendAdjusted = max(2, min(6, logicalCores / 3))
+        case .mps:
+            backendAdjusted = max(neuralWorkerHint, baseWorkers)
+        case .metal:
+            backendAdjusted = baseWorkers
+        }
+
+        if neuralAssistEnabled {
+            return max(backendAdjusted, neuralWorkerHint)
+        }
+        return backendAdjusted
+    }
+
+    private static func resolvePipelineQueueDepth(
+        environment: [String: String],
+        workerCount: Int
+    ) -> Int {
+        if let raw = environment["A4K_PIPELINE_QUEUE_DEPTH"],
+           let parsed = Int(raw) {
+            return max(1, min(maxPipelineDepth, parsed))
+        }
+
+        // Keep decode and worker queues ahead enough to reduce idle bubbles.
+        let autoDepth = workerCount + max(1, workerCount / 2)
+        return max(workerCount, min(maxPipelineDepth, autoDepth))
+    }
+
+    private static func resolveDecodeBackend(environment: [String: String]) -> DecodeBackend {
+        if let explicit = environment["A4K_DECODE_BACKEND"]?.lowercased() {
+            switch explicit {
+            case "videotoolbox", "vt", "video_toolbox":
+                return .videoToolbox
+            case "ffmpeg", "pipe":
+                return .ffmpeg
+            default:
+                break
+            }
+        }
+
+        if environment["A4K_USE_VT_DECODE"] == "1" {
+            return .videoToolbox
+        }
+
+        return .ffmpeg
     }
 
     private static func buildDecodeArguments(inputURL: URL) -> [String] {
@@ -661,6 +937,66 @@ final class ProcessingEngine {
             shouldInterpolate: false,
             intent: .defaultIntent
         )!
+    }
+
+    private final class VideoToolboxFrameReader {
+        enum ReaderError: LocalizedError {
+            case noVideoTrack
+            case cannotAddOutput
+            case startFailed(String)
+
+            var errorDescription: String? {
+                switch self {
+                case .noVideoTrack:
+                    return "No video track found for VideoToolbox decode"
+                case .cannotAddOutput:
+                    return "Unable to configure VideoToolbox reader output"
+                case let .startFailed(detail):
+                    return "VideoToolbox decode start failed: \(detail)"
+                }
+            }
+        }
+
+        private let reader: AVAssetReader
+        private let output: AVAssetReaderTrackOutput
+
+        init(inputURL: URL) throws {
+            let asset = AVURLAsset(url: inputURL)
+            guard let track = asset.tracks(withMediaType: .video).first else {
+                throw ReaderError.noVideoTrack
+            }
+
+            reader = try AVAssetReader(asset: asset)
+
+            let outputSettings: [String: Any] = [
+                kCVPixelBufferPixelFormatTypeKey as String: Int(kCVPixelFormatType_32BGRA),
+                kCVPixelBufferMetalCompatibilityKey as String: true,
+                kCVPixelBufferIOSurfacePropertiesKey as String: [:]
+            ]
+
+            output = AVAssetReaderTrackOutput(track: track, outputSettings: outputSettings)
+            output.alwaysCopiesSampleData = false
+
+            guard reader.canAdd(output) else {
+                throw ReaderError.cannotAddOutput
+            }
+
+            reader.add(output)
+
+            guard reader.startReading() else {
+                throw ReaderError.startFailed(reader.error?.localizedDescription ?? "unknown")
+            }
+        }
+
+        func nextFrame() -> CVPixelBuffer? {
+            guard reader.status == .reading,
+                  let sampleBuffer = output.copyNextSampleBuffer(),
+                  let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else {
+                return nil
+            }
+
+            return pixelBuffer
+        }
     }
 
     // MARK: - Cancellation

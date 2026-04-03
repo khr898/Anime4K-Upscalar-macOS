@@ -2,9 +2,18 @@ import Foundation
 import Metal
 import MetalPerformanceShaders
 
-private enum A4KMPSWeightLayout {
+private enum A4KMPSWeightLayout: CaseIterable {
 	case columnMajor
 	case rowMajor
+
+	func cacheTag() -> String {
+		switch self {
+		case .columnMajor:
+			return "column"
+		case .rowMajor:
+			return "row"
+		}
+	}
 
 	static func fromEnvironment(_ env: [String: String]) -> A4KMPSWeightLayout {
 		let raw = env["A4K_MPS_WEIGHT_LAYOUT"]?.lowercased()
@@ -15,17 +24,246 @@ private enum A4KMPSWeightLayout {
 	}
 }
 
-private enum A4KMPSWeightPackOrder {
-	case ohwi
-	case oihw
+private struct A4KMPSChannelOrder {
+	private let mapping: [Int]
+
+	private init(mapping: [Int]) {
+		self.mapping = mapping
+	}
+
+	static let rgba = A4KMPSChannelOrder(mapping: [0, 1, 2, 3])
+	static let bgra = A4KMPSChannelOrder(mapping: [2, 1, 0, 3])
+	static let argb = A4KMPSChannelOrder(mapping: [1, 2, 3, 0])
+	static let abgr = A4KMPSChannelOrder(mapping: [3, 2, 1, 0])
+
+	static func fromEnvironment(_ env: [String: String]) -> A4KMPSChannelOrder {
+		fromToken(env["A4K_MPS_CHANNEL_ORDER"]) ?? .rgba
+	}
+
+	static func fromToken(_ raw: String?) -> A4KMPSChannelOrder? {
+		switch raw?.lowercased() {
+		case "rgba":
+			return .rgba
+		case "bgra":
+			return .bgra
+		case "argb":
+			return .argb
+		case "abgr":
+			return .abgr
+		default:
+			return nil
+		}
+	}
+
+	static func allPermutations() -> [A4KMPSChannelOrder] {
+		var results: [A4KMPSChannelOrder] = []
+		let seed = [0, 1, 2, 3]
+
+		func permute(_ prefix: [Int], _ remaining: [Int]) {
+			if remaining.isEmpty {
+				results.append(A4KMPSChannelOrder(mapping: prefix))
+				return
+			}
+
+			for index in remaining.indices {
+				var nextPrefix = prefix
+				nextPrefix.append(remaining[index])
+				var nextRemaining = remaining
+				nextRemaining.remove(at: index)
+				permute(nextPrefix, nextRemaining)
+			}
+		}
+
+		permute([], seed)
+		return results
+	}
+
+	func map(_ logicalChannel: Int) -> Int {
+		let safe = max(0, min(3, logicalChannel))
+		return mapping[safe]
+	}
+
+	func inverse() -> A4KMPSChannelOrder {
+		var inverted = [Int](repeating: 0, count: 4)
+		for logical in 0..<4 {
+			let mapped = map(logical)
+			inverted[mapped] = logical
+		}
+		return A4KMPSChannelOrder(mapping: inverted)
+	}
+
+	func cacheTag() -> String {
+		mapping.map(String.init).joined(separator: "")
+	}
+}
+
+private struct A4KMPSWeightPackOrder {
+	private let axes: [Character]
+
+	private init(axes: [Character]) {
+		self.axes = axes
+	}
+
+	static let ohwi = A4KMPSWeightPackOrder(axes: ["o", "h", "w", "i"])
+	static let oihw = A4KMPSWeightPackOrder(axes: ["o", "i", "h", "w"])
 
 	static func fromEnvironment(_ env: [String: String]) -> A4KMPSWeightPackOrder {
-		switch env["A4K_MPS_WEIGHT_PACK"]?.lowercased() {
-		case "oihw":
-			return .oihw
-		default:
+		guard let raw = env["A4K_MPS_WEIGHT_PACK"]?.lowercased(),
+			  let parsed = parse(raw) else {
 			return .ohwi
 		}
+		return parsed
+	}
+
+	func cacheTag() -> String {
+		String(axes)
+	}
+
+	func mpsWeightsLayout() -> MPSCNNConvolutionWeightsLayout {
+		// Current Apple SDK support is OHWI-only for MPSCNNConvolutionDataSource.
+		return .OHWI
+	}
+
+	func packedIndex(outChannel: Int,
+					 inChannel: Int,
+					 y: Int,
+					 x: Int) -> Int {
+		let dimValues: [Character: Int] = [
+			"o": outChannel,
+			"i": inChannel,
+			"h": y,
+			"w": x
+		]
+		let dimExtents: [Character: Int] = [
+			"o": 4,
+			"i": 4,
+			"h": 3,
+			"w": 3
+		]
+
+		var index = 0
+		for axis in axes {
+			let extent = dimExtents[axis] ?? 1
+			let value = dimValues[axis] ?? 0
+			index = (index * extent) + value
+		}
+		return index
+	}
+
+	private static func parse(_ raw: String) -> A4KMPSWeightPackOrder? {
+		guard raw.count == 4 else {
+			return nil
+		}
+
+		let chars = Array(raw)
+		let allowed: Set<Character> = ["o", "i", "h", "w"]
+		let set = Set(chars)
+		guard set == allowed else {
+			return nil
+		}
+
+		return A4KMPSWeightPackOrder(axes: chars)
+	}
+}
+
+private enum A4KMPSEquivalenceInputMode {
+	case auto
+	case unit
+	case signed
+
+	static func fromEnvironment(_ env: [String: String]) -> A4KMPSEquivalenceInputMode {
+		switch env["A4K_MPS_EQ_INPUT_MODE"]?.lowercased() {
+		case "unit", "unsigned", "0to1":
+			return .unit
+		case "signed", "neg1to1":
+			return .signed
+		default:
+			return .auto
+		}
+	}
+
+	func resolve(firstInputTextureName: String) -> A4KMPSEquivalenceInputMode {
+		switch self {
+		case .auto:
+			return firstInputTextureName.uppercased() == "MAIN" ? .unit : .signed
+		case .unit, .signed:
+			return self
+		}
+	}
+
+	func cacheTag() -> String {
+		switch self {
+		case .auto:
+			return "auto"
+		case .unit:
+			return "unit"
+		case .signed:
+			return "signed"
+		}
+	}
+}
+
+private enum A4KMPSEquivalencePattern: String {
+	case random
+	case horizontalRamp = "h_ramp"
+	case verticalRamp = "v_ramp"
+	case checkerboard
+	case stepX = "step_x"
+}
+
+private enum A4KMPSEquivalencePatternSet {
+	case randomOnly
+	case structured
+	case mixed
+
+	static func fromEnvironment(_ env: [String: String]) -> A4KMPSEquivalencePatternSet {
+		switch env["A4K_MPS_EQ_PATTERNS"]?.lowercased() {
+		case "random", "random-only", "random_only":
+			return .randomOnly
+		case "structured", "deterministic":
+			return .structured
+		default:
+			return .mixed
+		}
+	}
+
+	func patterns() -> [A4KMPSEquivalencePattern] {
+		switch self {
+		case .randomOnly:
+			return [.random]
+		case .structured:
+			return [.stepX, .checkerboard, .horizontalRamp, .verticalRamp]
+		case .mixed:
+			return [.random, .stepX, .checkerboard, .horizontalRamp, .verticalRamp]
+		}
+	}
+
+	func cacheTag() -> String {
+		switch self {
+		case .randomOnly:
+			return "random"
+		case .structured:
+			return "structured"
+		case .mixed:
+			return "mixed"
+		}
+	}
+}
+
+private struct A4KMPSMappingCandidate {
+	let weightLayout: A4KMPSWeightLayout
+	let weightPackOrder: A4KMPSWeightPackOrder
+	let inputChannelOrder: A4KMPSChannelOrder
+	let outputChannelOrder: A4KMPSChannelOrder
+	let flipKernelX: Bool
+	let flipKernelY: Bool
+	let offsetX: Int
+	let offsetY: Int
+
+	func cacheTag() -> String {
+		let flipTag = "\(flipKernelX ? 1 : 0)\(flipKernelY ? 1 : 0)"
+		let offsetTag = "\(offsetX),\(offsetY)"
+		return "layout=\(weightLayout.cacheTag())|pack=\(weightPackOrder.cacheTag())|in=\(inputChannelOrder.cacheTag())|out=\(outputChannelOrder.cacheTag())|flip=\(flipTag)|offset=\(offsetTag)"
 	}
 }
 
@@ -35,14 +273,21 @@ private struct A4KMPSPlannerConfig {
 	let validationSampleSize: Int
 	let equivalenceMaxAbs: Float
 	let equivalenceMeanAbs: Float
+	let equivalenceBorderIgnore: Int
 	let maxPlans: Int?
 	let includePasses: Set<Int>?
 	let weightLayout: A4KMPSWeightLayout
 	let weightPackOrder: A4KMPSWeightPackOrder
+	let channelOrder: A4KMPSChannelOrder
+	let equivalenceInputMode: A4KMPSEquivalenceInputMode
+	let equivalencePatternSet: A4KMPSEquivalencePatternSet
 	let flipKernelX: Bool
 	let flipKernelY: Bool
 	let offsetX: Int
 	let offsetY: Int
+	let autoMapCandidates: Bool
+	let autoMapOffsets: Bool
+	let autoMapChannelPermutations: Bool
 
 	static func fromEnvironment() -> A4KMPSPlannerConfig {
 		let env = ProcessInfo.processInfo.environment
@@ -51,14 +296,21 @@ private struct A4KMPSPlannerConfig {
 		let sampleSize = max(8, min(128, Int(env["A4K_MPS_EQ_SAMPLE_SIZE"] ?? "64") ?? 64))
 		let maxAbs = Float(env["A4K_MPS_EQ_MAX_ABS"] ?? "0.003") ?? 0.003
 		let meanAbs = Float(env["A4K_MPS_EQ_MEAN_ABS"] ?? "0.0005") ?? 0.0005
+		let borderIgnore = max(0, min(4, Int(env["A4K_MPS_EQ_BORDER_IGNORE"] ?? "0") ?? 0))
 		let maxPlans = env["A4K_MPS_MAX_PLANS"].flatMap(Int.init)
 		let includePasses = parsePassList(env["A4K_MPS_INCLUDE_PASSES"])
 		let weightLayout = A4KMPSWeightLayout.fromEnvironment(env)
 		let weightPackOrder = A4KMPSWeightPackOrder.fromEnvironment(env)
+		let channelOrder = A4KMPSChannelOrder.fromEnvironment(env)
+		let equivalenceInputMode = A4KMPSEquivalenceInputMode.fromEnvironment(env)
+		let equivalencePatternSet = A4KMPSEquivalencePatternSet.fromEnvironment(env)
 		let flipKernelX = (env["A4K_MPS_FLIP_KERNEL_X"] ?? "0") == "1"
 		let flipKernelY = (env["A4K_MPS_FLIP_KERNEL_Y"] ?? "0") == "1"
-		let offsetX = max(0, min(2, Int(env["A4K_MPS_OFFSET_X"] ?? "1") ?? 1))
-		let offsetY = max(0, min(2, Int(env["A4K_MPS_OFFSET_Y"] ?? "1") ?? 1))
+		let offsetX = max(0, min(2, Int(env["A4K_MPS_OFFSET_X"] ?? "0") ?? 0))
+		let offsetY = max(0, min(2, Int(env["A4K_MPS_OFFSET_Y"] ?? "0") ?? 0))
+		let autoMapCandidates = (env["A4K_MPS_AUTO_MAP"] ?? "1") != "0"
+		let autoMapOffsets = (env["A4K_MPS_AUTO_OFFSET"] ?? "0") != "0"
+		let autoMapChannelPermutations = (env["A4K_MPS_AUTO_CHANNEL_PERM"] ?? "1") != "0"
 
 		return A4KMPSPlannerConfig(
 			enabled: enabled,
@@ -66,14 +318,21 @@ private struct A4KMPSPlannerConfig {
 			validationSampleSize: sampleSize,
 			equivalenceMaxAbs: maxAbs,
 			equivalenceMeanAbs: meanAbs,
+			equivalenceBorderIgnore: borderIgnore,
 			maxPlans: maxPlans,
 			includePasses: includePasses,
 			weightLayout: weightLayout,
 			weightPackOrder: weightPackOrder,
+			channelOrder: channelOrder,
+			equivalenceInputMode: equivalenceInputMode,
+			equivalencePatternSet: equivalencePatternSet,
 			flipKernelX: flipKernelX,
 			flipKernelY: flipKernelY,
 			offsetX: offsetX,
-			offsetY: offsetY
+			offsetY: offsetY,
+			autoMapCandidates: autoMapCandidates,
+			autoMapOffsets: autoMapOffsets,
+			autoMapChannelPermutations: autoMapChannelPermutations
 		)
 	}
 
@@ -103,16 +362,19 @@ final class A4KMPSConvolutionDataSource: NSObject, MPSCNNConvolutionDataSource {
 	private let weightsPointer: UnsafeMutablePointer<Float>
 	private let weightsCount: Int
 	private let biasPointer: UnsafeMutablePointer<Float>
+	private let weightsLayoutValue: MPSCNNConvolutionWeightsLayout
 
 	init(label: String,
 		 kernelWidth: Int,
 		 kernelHeight: Int,
 		 inputFeatureChannels: Int,
 		 outputFeatureChannels: Int,
+		 weightsLayout: MPSCNNConvolutionWeightsLayout,
 		 weights: [Float],
 		 bias: [Float]) {
 		self.labelValue = label
 		self.weightsCount = weights.count
+		self.weightsLayoutValue = weightsLayout
 		self.descriptorValue = MPSCNNConvolutionDescriptor(
 			kernelWidth: kernelWidth,
 			kernelHeight: kernelHeight,
@@ -169,6 +431,10 @@ final class A4KMPSConvolutionDataSource: NSObject, MPSCNNConvolutionDataSource {
 
 	func biasTerms() -> UnsafeMutablePointer<Float>? {
 		biasPointer
+	}
+
+	func weightsLayout() -> MPSCNNConvolutionWeightsLayout {
+		weightsLayoutValue
 	}
 
 	func load() -> Bool {
@@ -260,6 +526,10 @@ enum A4KMPSConvolutionPlanner {
 				continue
 			}
 
+			let resolvedInputMode = config.equivalenceInputMode.resolve(
+				firstInputTextureName: metadata.inputTextureNames[0]
+			)
+
 			let functionName = metadata.functionName
 			guard let section = sectionForFunction(functionName: functionName, in: metalSource) else {
 				continue
@@ -269,56 +539,120 @@ enum A4KMPSConvolutionPlanner {
 				continue
 			}
 
-			guard let parsed = parseSingleInput3x3Pass(
-				section: section,
+			let baseCandidate = A4KMPSMappingCandidate(
 				weightLayout: config.weightLayout,
 				weightPackOrder: config.weightPackOrder,
+				inputChannelOrder: config.channelOrder,
+				outputChannelOrder: config.channelOrder,
 				flipKernelX: config.flipKernelX,
-				flipKernelY: config.flipKernelY
-			) else {
-				continue
-			}
-
-			let label = "A4K_MPS_\(shaderFileName)_\(functionName)"
-			let dataSource = A4KMPSConvolutionDataSource(
-				label: label,
-				kernelWidth: 3,
-				kernelHeight: 3,
-				inputFeatureChannels: 4,
-				outputFeatureChannels: 4,
-				weights: parsed.packedWeights,
-				bias: parsed.bias
+				flipKernelY: config.flipKernelY,
+				offsetX: config.offsetX,
+				offsetY: config.offsetY
 			)
+			let candidates = mappingCandidates(config: config)
 
-			let convolution = MPSCNNConvolution(device: device, weights: dataSource)
-			convolution.edgeMode = .clamp
-			convolution.offset = MPSOffset(x: config.offsetX, y: config.offsetY, z: 0)
+			var acceptedPlan: A4KMPSPassPlan?
+			var acceptedCandidate: A4KMPSMappingCandidate?
+			var bestRejected: (
+				candidate: A4KMPSMappingCandidate,
+				validation: (accepted: Bool, maxAbs: Float, meanAbs: Float, worstPattern: String)
+			)?
 
-			let plan = A4KMPSPassPlan(dataSource: dataSource, convolution: convolution)
+			for candidate in candidates {
+				guard let parsed = parseSingleInput3x3Pass(
+					section: section,
+					weightLayout: candidate.weightLayout,
+					weightPackOrder: candidate.weightPackOrder,
+					inputChannelOrder: candidate.inputChannelOrder,
+					outputChannelOrder: candidate.outputChannelOrder,
+					flipKernelX: candidate.flipKernelX,
+					flipKernelY: candidate.flipKernelY
+				) else {
+					continue
+				}
 
-			if config.validateEquivalence {
-				let validation = validatePlanEquivalence(
-					device: device,
-					library: library,
-					functionName: functionName,
-					plan: plan,
-					sampleSize: config.validationSampleSize,
-					maxAbsThreshold: config.equivalenceMaxAbs,
-					meanAbsThreshold: config.equivalenceMeanAbs
+				let label = "A4K_MPS_\(shaderFileName)_\(functionName)"
+				let dataSource = A4KMPSConvolutionDataSource(
+					label: label,
+					kernelWidth: 3,
+					kernelHeight: 3,
+					inputFeatureChannels: 4,
+					outputFeatureChannels: 4,
+					weightsLayout: candidate.weightPackOrder.mpsWeightsLayout(),
+					weights: parsed.packedWeights,
+					bias: parsed.bias
 				)
 
-				if !validation.accepted {
-					NSLog("[Anime4KMPS] Skipping %@ pass %d (%@): equivalence failed (maxAbs=%.6f meanAbs=%.6f)",
+				let convolution = MPSCNNConvolution(device: device, weights: dataSource)
+				convolution.accumulatorPrecisionOption = .float
+				convolution.edgeMode = .clamp
+				convolution.offset = MPSOffset(x: candidate.offsetX, y: candidate.offsetY, z: 0)
+
+				let plan = A4KMPSPassPlan(dataSource: dataSource, convolution: convolution)
+
+				if config.validateEquivalence {
+					let validation = validatePlanEquivalence(
+						device: device,
+						library: library,
+						functionName: functionName,
+						plan: plan,
+						inputMode: resolvedInputMode,
+						patternSet: config.equivalencePatternSet,
+						sampleSize: config.validationSampleSize,
+						borderIgnore: config.equivalenceBorderIgnore,
+						maxAbsThreshold: config.equivalenceMaxAbs,
+						meanAbsThreshold: config.equivalenceMeanAbs
+					)
+
+					if validation.accepted {
+						acceptedPlan = plan
+						acceptedCandidate = candidate
+						break
+					}
+
+					if let existing = bestRejected {
+						if validationIsBetter(validation, than: existing.validation) {
+							bestRejected = (candidate, validation)
+						}
+					} else {
+						bestRejected = (candidate, validation)
+					}
+
+					continue
+				}
+
+				acceptedPlan = plan
+				acceptedCandidate = candidate
+				break
+			}
+
+			guard let acceptedPlan else {
+				if let bestRejected {
+					NSLog("[Anime4KMPS] Skipping %@ pass %d (%@): equivalence failed (mode=%@ patterns=%@ worst=%@ candidate=%@ border=%d maxAbs=%.6f meanAbs=%.6f)",
 						  shaderFileName,
 						  metadata.passIndex,
 						  functionName,
-						  validation.maxAbs,
-						  validation.meanAbs)
-					continue
+						  resolvedInputMode.cacheTag(),
+						  config.equivalencePatternSet.cacheTag(),
+						  bestRejected.validation.worstPattern,
+						  bestRejected.candidate.cacheTag(),
+						  config.equivalenceBorderIgnore,
+						  bestRejected.validation.maxAbs,
+						  bestRejected.validation.meanAbs)
 				}
+				continue
 			}
 
-			plans[metadata.passIndex] = plan
+			if let acceptedCandidate,
+			   acceptedCandidate.cacheTag() != baseCandidate.cacheTag() {
+				NSLog("[Anime4KMPS] Pass %d (%@) selected tuned mapping: %@ (default=%@)",
+					  metadata.passIndex,
+					  functionName,
+					  acceptedCandidate.cacheTag(),
+					  baseCandidate.cacheTag())
+			}
+
+			plans[metadata.passIndex] = acceptedPlan
 		}
 
 		if plans.isEmpty {
@@ -328,6 +662,115 @@ enum A4KMPSConvolutionPlanner {
 		}
 
 		return plans
+	}
+
+	private static func mappingCandidates(config: A4KMPSPlannerConfig) -> [A4KMPSMappingCandidate] {
+		let baseCandidate = A4KMPSMappingCandidate(
+			weightLayout: config.weightLayout,
+			weightPackOrder: config.weightPackOrder,
+			inputChannelOrder: config.channelOrder,
+			outputChannelOrder: config.channelOrder,
+			flipKernelX: config.flipKernelX,
+			flipKernelY: config.flipKernelY,
+			offsetX: config.offsetX,
+			offsetY: config.offsetY
+		)
+
+		guard config.autoMapCandidates else {
+			return [baseCandidate]
+		}
+
+		var candidates: [A4KMPSMappingCandidate] = [baseCandidate]
+		var seen = Set<String>([baseCandidate.cacheTag()])
+
+		let weightLayouts = A4KMPSWeightLayout.allCases
+		let weightPacks = [A4KMPSWeightPackOrder.ohwi, .oihw]
+		let inputChannelOrders: [A4KMPSChannelOrder] = config.autoMapChannelPermutations
+			? A4KMPSChannelOrder.allPermutations()
+			: [.rgba, .bgra, .argb, .abgr]
+		let flips = [false, true]
+
+		let offsetXs = config.autoMapOffsets
+			? Array(Set([config.offsetX, 0, 1])).sorted()
+			: [config.offsetX]
+		let offsetYs = config.autoMapOffsets
+			? Array(Set([config.offsetY, 0, 1])).sorted()
+			: [config.offsetY]
+
+		for layout in weightLayouts {
+			for pack in weightPacks {
+				for inputChannel in inputChannelOrders {
+					let outputHypotheses = outputChannelHypotheses(
+						inputChannelOrder: inputChannel,
+						config: config
+					)
+
+					for outputChannel in outputHypotheses {
+						for flipX in flips {
+							for flipY in flips {
+								for offsetX in offsetXs {
+									for offsetY in offsetYs {
+										let candidate = A4KMPSMappingCandidate(
+											weightLayout: layout,
+											weightPackOrder: pack,
+											inputChannelOrder: inputChannel,
+											outputChannelOrder: outputChannel,
+											flipKernelX: flipX,
+											flipKernelY: flipY,
+											offsetX: offsetX,
+											offsetY: offsetY
+										)
+
+										let tag = candidate.cacheTag()
+										if seen.insert(tag).inserted {
+											candidates.append(candidate)
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
+		return candidates
+	}
+
+	private static func outputChannelHypotheses(
+		inputChannelOrder: A4KMPSChannelOrder,
+		config: A4KMPSPlannerConfig
+	) -> [A4KMPSChannelOrder] {
+		var candidates: [A4KMPSChannelOrder] = [
+			config.channelOrder,
+			.rgba
+		]
+
+		if config.autoMapChannelPermutations {
+			candidates.append(inputChannelOrder)
+			candidates.append(inputChannelOrder.inverse())
+		} else {
+			candidates.append(contentsOf: [.bgra, .argb, .abgr])
+		}
+
+		var seen = Set<String>()
+		var deduped: [A4KMPSChannelOrder] = []
+		for order in candidates {
+			if seen.insert(order.cacheTag()).inserted {
+				deduped.append(order)
+			}
+		}
+		return deduped
+	}
+
+	private static func validationIsBetter(
+		_ lhs: (accepted: Bool, maxAbs: Float, meanAbs: Float, worstPattern: String),
+		than rhs: (accepted: Bool, maxAbs: Float, meanAbs: Float, worstPattern: String)
+	) -> Bool {
+		if lhs.maxAbs != rhs.maxAbs {
+			return lhs.maxAbs < rhs.maxAbs
+		}
+		return lhs.meanAbs < rhs.meanAbs
 	}
 
 	private static func sectionForFunction(functionName: String,
@@ -346,6 +789,8 @@ enum A4KMPSConvolutionPlanner {
 	private static func parseSingleInput3x3Pass(section: String,
 									weightLayout: A4KMPSWeightLayout,
 									weightPackOrder: A4KMPSWeightPackOrder,
+									inputChannelOrder: A4KMPSChannelOrder,
+									outputChannelOrder: A4KMPSChannelOrder,
 									flipKernelX: Bool,
 									flipKernelY: Bool) -> A4KValidatedMPSWeights? {
 		let range = NSRange(location: 0, length: (section as NSString).length)
@@ -418,21 +863,23 @@ enum A4KMPSConvolutionPlanner {
 					}
 
 					for inChannel in 0..<4 {
+						let mappedInChannel = inputChannelOrder.map(inChannel)
+						let mappedOutChannel = outputChannelOrder.map(outChannel)
+
 						let matrixValue: Float
 						switch weightLayout {
 						case .columnMajor:
-							matrixValue = matrix[inChannel * 4 + outChannel]
+							matrixValue = matrix[mappedInChannel * 4 + mappedOutChannel]
 						case .rowMajor:
-							matrixValue = matrix[outChannel * 4 + inChannel]
+							matrixValue = matrix[mappedOutChannel * 4 + mappedInChannel]
 						}
 
-						let packedIndex: Int
-						switch weightPackOrder {
-						case .ohwi:
-							packedIndex = (((outChannel * 3 + y) * 3 + x) * 4 + inChannel)
-						case .oihw:
-							packedIndex = (((outChannel * 4 + inChannel) * 3 + y) * 3 + x)
-						}
+						let packedIndex = weightPackOrder.packedIndex(
+							outChannel: outChannel,
+							inChannel: inChannel,
+							y: y,
+							x: x
+						)
 
 						packedWeights[packedIndex] = matrixValue
 					}
@@ -440,7 +887,12 @@ enum A4KMPSConvolutionPlanner {
 			}
 		}
 
-		return A4KValidatedMPSWeights(packedWeights: packedWeights, bias: bias)
+		var mappedBias = [Float](repeating: 0, count: 4)
+		for outChannel in 0..<4 {
+			mappedBias[outChannel] = bias[outputChannelOrder.map(outChannel)]
+		}
+
+		return A4KValidatedMPSWeights(packedWeights: packedWeights, bias: mappedBias)
 	}
 
 	private static func parseFloatList(_ raw: String) -> [Float] {
@@ -451,104 +903,200 @@ enum A4KMPSConvolutionPlanner {
 			}
 	}
 
+	private static func fillEquivalenceInputHalf(pattern: A4KMPSEquivalencePattern,
+									inputMode: A4KMPSEquivalenceInputMode,
+									sampleSize: Int,
+									generator: inout A4KLCG,
+									output: inout [UInt16]) {
+		let sampleSizeSafe = max(1, sampleSize)
+		let invSpan = 1.0 / Float(max(1, sampleSizeSafe - 1))
+
+		for i in 0..<output.count {
+			let pixelIndex = i / 4
+			let channel = i & 3
+			let x = pixelIndex % sampleSizeSafe
+			let y = pixelIndex / sampleSizeSafe
+
+			if inputMode == .unit && channel == 3 {
+				// MAIN decode path is opaque BGRA in practice; probing with random alpha
+				// causes false negatives that do not reflect runtime behavior.
+				output[i] = Float16(1.0).bitPattern
+				continue
+			}
+
+			let baseUnit: Float
+			switch pattern {
+			case .random:
+				baseUnit = generator.nextUnit()
+			case .horizontalRamp:
+				baseUnit = Float(x) * invSpan
+			case .verticalRamp:
+				baseUnit = Float(y) * invSpan
+			case .checkerboard:
+				baseUnit = ((x + y) & 1) == 0 ? 0.875 : 0.125
+			case .stepX:
+				baseUnit = x < (sampleSizeSafe / 2) ? 0.1 : 0.9
+			}
+
+			let channelOffset = Float(channel) * 0.02
+			let unitValue = min(max((baseUnit * 0.94) + channelOffset, 0), 1)
+
+			let value: Float
+			switch inputMode {
+			case .unit:
+				value = unitValue
+			case .signed, .auto:
+				value = min(max((unitValue * 2.0) - 1.0, -1.0), 1.0)
+			}
+
+			output[i] = Float16(value).bitPattern
+		}
+	}
+
 	private static func validatePlanEquivalence(device: MTLDevice,
 									 library: MTLLibrary,
 									 functionName: String,
 									 plan: A4KMPSPassPlan,
+									 inputMode: A4KMPSEquivalenceInputMode,
+									 patternSet: A4KMPSEquivalencePatternSet,
 									 sampleSize: Int,
+									 borderIgnore: Int,
 									 maxAbsThreshold: Float,
-									 meanAbsThreshold: Float) -> (accepted: Bool, maxAbs: Float, meanAbs: Float) {
+									 meanAbsThreshold: Float) -> (accepted: Bool, maxAbs: Float, meanAbs: Float, worstPattern: String) {
 		guard let function = library.makeFunction(name: functionName),
 			  let pipeline = try? device.makeComputePipelineState(function: function),
 			  let inputTexture = makeSharedRGBA16Texture(device: device, width: sampleSize, height: sampleSize),
 			  let referenceTexture = makeSharedRGBA16Texture(device: device, width: sampleSize, height: sampleSize),
 			  let mpsTexture = makeSharedRGBA16Texture(device: device, width: sampleSize, height: sampleSize),
 			  let commandQueue = device.makeCommandQueue() else {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
+			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, "setup")
+		}
+
+		guard let sampler = makeClampNearestSampler(device: device) else {
+			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, "setup")
 		}
 
 		var generator = A4KLCG(seed: 0xA4C54AFE)
 		let pixelCount = sampleSize * sampleSize * 4
-		var inputHalf = [UInt16](repeating: 0, count: pixelCount)
-		for i in 0..<pixelCount {
-			let value = generator.nextSignedUnit()
-			inputHalf[i] = Float16(value).bitPattern
-		}
-
 		let bytesPerRow = sampleSize * 4 * MemoryLayout<UInt16>.size
-		inputHalf.withUnsafeBytes { raw in
-			guard let base = raw.baseAddress else { return }
-			inputTexture.replace(region: MTLRegionMake2D(0, 0, sampleSize, sampleSize),
-						mipmapLevel: 0,
-						withBytes: base,
-						bytesPerRow: bytesPerRow)
-		}
-
-		guard let sampler = makeClampNearestSampler(device: device) else {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-		}
-
-		guard let referenceCB = commandQueue.makeCommandBuffer(),
-			  let referenceEncoder = referenceCB.makeComputeCommandEncoder() else {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-		}
-
-		referenceEncoder.setComputePipelineState(pipeline)
-		referenceEncoder.setSamplerState(sampler, index: 0)
-		referenceEncoder.setTexture(inputTexture, index: 0)
-		referenceEncoder.setTexture(referenceTexture, index: 1)
-
-		let threadgroup = recommendedThreadgroupSize(for: pipeline)
-		let grid = MTLSize(width: sampleSize, height: sampleSize, depth: 1)
-		referenceEncoder.dispatchThreads(grid, threadsPerThreadgroup: threadgroup)
-		referenceEncoder.endEncoding()
-
-		referenceCB.commit()
-		referenceCB.waitUntilCompleted()
-		if referenceCB.status == .error {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-		}
-
-		guard let mpsCB = commandQueue.makeCommandBuffer() else {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-		}
-
-		guard plan.encode(commandBuffer: mpsCB, sourceTexture: inputTexture, destinationTexture: mpsTexture) else {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-		}
-
-		mpsCB.commit()
-		mpsCB.waitUntilCompleted()
-		if mpsCB.status == .error {
-			return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-		}
-
+		var inputHalf = [UInt16](repeating: 0, count: pixelCount)
 		var referenceHalf = [UInt16](repeating: 0, count: pixelCount)
 		var mpsHalf = [UInt16](repeating: 0, count: pixelCount)
+		let threadgroup = recommendedThreadgroupSize(for: pipeline)
+		let grid = MTLSize(width: sampleSize, height: sampleSize, depth: 1)
 
-		referenceTexture.getBytes(&referenceHalf,
-						 bytesPerRow: bytesPerRow,
-						 from: MTLRegionMake2D(0, 0, sampleSize, sampleSize),
-						 mipmapLevel: 0)
-		mpsTexture.getBytes(&mpsHalf,
-					 bytesPerRow: bytesPerRow,
-					 from: MTLRegionMake2D(0, 0, sampleSize, sampleSize),
-					 mipmapLevel: 0)
+		var worstMaxAbs: Float = 0
+		var worstMeanAbs: Float = 0
+		var worstPattern = A4KMPSEquivalencePattern.random
+		let maxBorder = max(0, (sampleSize / 2) - 1)
+		let safeBorderIgnore = max(0, min(maxBorder, borderIgnore))
 
-		var maxAbs: Float = 0
-		var sumAbs: Float = 0
+		for pattern in patternSet.patterns() {
+			fillEquivalenceInputHalf(
+				pattern: pattern,
+				inputMode: inputMode,
+				sampleSize: sampleSize,
+				generator: &generator,
+				output: &inputHalf
+			)
 
-		for i in 0..<pixelCount {
-			let ref = Float(Float16(bitPattern: referenceHalf[i]))
-			let test = Float(Float16(bitPattern: mpsHalf[i]))
-			let diff = abs(ref - test)
-			maxAbs = max(maxAbs, diff)
-			sumAbs += diff
+			inputHalf.withUnsafeBytes { raw in
+				guard let base = raw.baseAddress else { return }
+				inputTexture.replace(region: MTLRegionMake2D(0, 0, sampleSize, sampleSize),
+							mipmapLevel: 0,
+							withBytes: base,
+							bytesPerRow: bytesPerRow)
+			}
+
+			guard let referenceCB = commandQueue.makeCommandBuffer(),
+				  let referenceEncoder = referenceCB.makeComputeCommandEncoder() else {
+				return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, pattern.rawValue)
+			}
+
+			referenceEncoder.setComputePipelineState(pipeline)
+			referenceEncoder.setSamplerState(sampler, index: 0)
+			referenceEncoder.setTexture(inputTexture, index: 0)
+			referenceEncoder.setTexture(referenceTexture, index: 1)
+			referenceEncoder.dispatchThreads(grid, threadsPerThreadgroup: threadgroup)
+			referenceEncoder.endEncoding()
+
+			referenceCB.commit()
+			referenceCB.waitUntilCompleted()
+			if referenceCB.status == .error {
+				return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, pattern.rawValue)
+			}
+
+			guard let mpsCB = commandQueue.makeCommandBuffer() else {
+				return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, pattern.rawValue)
+			}
+
+			guard plan.encode(commandBuffer: mpsCB, sourceTexture: inputTexture, destinationTexture: mpsTexture) else {
+				return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, pattern.rawValue)
+			}
+
+			mpsCB.commit()
+			mpsCB.waitUntilCompleted()
+			if mpsCB.status == .error {
+				return (false, Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude, pattern.rawValue)
+			}
+
+			referenceTexture.getBytes(&referenceHalf,
+								 bytesPerRow: bytesPerRow,
+								 from: MTLRegionMake2D(0, 0, sampleSize, sampleSize),
+								 mipmapLevel: 0)
+			mpsTexture.getBytes(&mpsHalf,
+							 bytesPerRow: bytesPerRow,
+							 from: MTLRegionMake2D(0, 0, sampleSize, sampleSize),
+							 mipmapLevel: 0)
+
+			var maxAbs: Float = 0
+			var sumAbs: Float = 0
+			var comparedSamples = 0
+
+			for pixelIndex in 0..<(sampleSize * sampleSize) {
+				let x = pixelIndex % sampleSize
+				let y = pixelIndex / sampleSize
+
+				if safeBorderIgnore > 0,
+				   (x < safeBorderIgnore ||
+					y < safeBorderIgnore ||
+					x >= (sampleSize - safeBorderIgnore) ||
+					y >= (sampleSize - safeBorderIgnore)) {
+					continue
+				}
+
+				for channel in 0..<4 {
+					let index = pixelIndex * 4 + channel
+					let ref = Float(Float16(bitPattern: referenceHalf[index]))
+					let test = Float(Float16(bitPattern: mpsHalf[index]))
+					let diff = abs(ref - test)
+					maxAbs = max(maxAbs, diff)
+					sumAbs += diff
+					comparedSamples += 1
+				}
+			}
+
+			if comparedSamples == 0 {
+				for i in 0..<pixelCount {
+					let ref = Float(Float16(bitPattern: referenceHalf[i]))
+					let test = Float(Float16(bitPattern: mpsHalf[i]))
+					let diff = abs(ref - test)
+					maxAbs = max(maxAbs, diff)
+					sumAbs += diff
+				}
+				comparedSamples = pixelCount
+			}
+
+			let meanAbs = sumAbs / Float(max(1, comparedSamples))
+			if maxAbs > worstMaxAbs || meanAbs > worstMeanAbs {
+				worstMaxAbs = maxAbs
+				worstMeanAbs = meanAbs
+				worstPattern = pattern
+			}
 		}
 
-		let meanAbs = sumAbs / Float(max(1, pixelCount))
-		let accepted = (maxAbs <= maxAbsThreshold) && (meanAbs <= meanAbsThreshold)
-		return (accepted, maxAbs, meanAbs)
+		let accepted = (worstMaxAbs <= maxAbsThreshold) && (worstMeanAbs <= meanAbsThreshold)
+		return (accepted, worstMaxAbs, worstMeanAbs, worstPattern.rawValue)
 	}
 
 	private static func makeSharedRGBA16Texture(device: MTLDevice,
@@ -593,9 +1141,13 @@ private struct A4KLCG {
 		return UInt32(truncatingIfNeeded: state >> 16)
 	}
 
-	mutating func nextSignedUnit() -> Float {
+	mutating func nextUnit() -> Float {
 		let raw = nextUInt32()
-		let normalized = Float(raw) / Float(UInt32.max)
+		return Float(raw) / Float(UInt32.max)
+	}
+
+	mutating func nextSignedUnit() -> Float {
+		let normalized = nextUnit()
 		return (normalized * 2.0) - 1.0
 	}
 }

@@ -9,6 +9,8 @@ struct Phase4BenchConfig {
     let preloadFrames: Int
     let outputScale: Int
     let workerCount: Int
+    let pipelineQueueDepth: Int
+    let gpuInflightDepth: Int
     let backend: A4KComputeBackend
     let useNeuralAssist: Bool
     let ffmpegURL: URL
@@ -33,8 +35,12 @@ struct Phase4BenchConfig {
         let legacyUseMPS = (env["A4K_BENCH_USE_MPS"] ?? "1") != "0"
         backend = explicitBackend ?? (legacyUseMPS ? .mps : .metal)
         useNeuralAssist = (env["A4K_BENCH_USE_NEURAL_ASSIST"] ?? "1") != "0"
-        let defaultWorkers = useNeuralAssist ? 3 : 1
+        let defaultWorkers = Self.recommendedWorkerCount(backend: backend, neuralAssistEnabled: useNeuralAssist)
         workerCount = max(1, min(8, Int(env["A4K_BENCH_WORKERS"] ?? "\(defaultWorkers)") ?? defaultWorkers))
+        let autoQueueDepth = max(workerCount, min(16, workerCount + max(1, workerCount / 2)))
+        pipelineQueueDepth = max(1, min(16, Int(env["A4K_BENCH_QUEUE_DEPTH"] ?? "\(autoQueueDepth)") ?? autoQueueDepth))
+        let defaultInflightDepth = max(1, min(8, workerCount + max(1, workerCount / 2)))
+        gpuInflightDepth = max(1, min(8, Int(env["A4K_BENCH_GPU_INFLIGHT"] ?? "\(defaultInflightDepth)") ?? defaultInflightDepth))
 
         ffmpegURL = URL(fileURLWithPath: env["A4K_BENCH_FFMPEG"] ?? "/opt/homebrew/bin/ffmpeg")
         ffprobeURL = URL(fileURLWithPath: env["A4K_BENCH_FFPROBE"] ?? "/opt/homebrew/bin/ffprobe")
@@ -57,6 +63,29 @@ struct Phase4BenchConfig {
             throw BenchError.invalidArguments("Could not find metal_sources directory from cwd=\(cwd)")
         }
         metalSourceDirectoryPath = found
+    }
+
+    private static func recommendedWorkerCount(
+        backend: A4KComputeBackend,
+        neuralAssistEnabled: Bool
+    ) -> Int {
+        let logicalCores = max(1, ProcessInfo.processInfo.activeProcessorCount)
+        let baseWorkers = max(2, min(8, logicalCores / 2))
+
+        let backendAdjusted: Int
+        switch backend {
+        case .coreML:
+            backendAdjusted = max(2, min(6, logicalCores / 3))
+        case .mps:
+            backendAdjusted = max(3, baseWorkers)
+        case .metal:
+            backendAdjusted = baseWorkers
+        }
+
+        if neuralAssistEnabled {
+            return max(backendAdjusted, 3)
+        }
+        return backendAdjusted
     }
 }
 
@@ -112,9 +141,14 @@ struct Phase4AAHQBenchmarkMain {
             print("BACKEND: \(config.backend.rawValue)")
             print("MPS: \(config.useMPS ? "enabled" : "disabled")")
             print("WORKERS: \(config.workerCount)")
+            print("QUEUE_DEPTH: \(config.pipelineQueueDepth)")
+            print("GPU_INFLIGHT: \(config.gpuInflightDepth)")
             print("PRELOAD_FRAMES: \(config.preloadFrames)")
             print("METRICS_CSV: \(env["A4K_BENCH_METRICS_CSV"] ?? "/tmp/a4k_phase4_metrics.csv")")
             stage("ffprobe complete")
+
+            // Keep this env hint explicit so processor instances use identical inflight behavior.
+            setenv("A4K_NO_READBACK_INFLIGHT", "\(config.gpuInflightDepth)", 1)
 
             let shaders = [
                 "Anime4K_Clamp_Highlights",
@@ -196,7 +230,7 @@ struct Phase4AAHQBenchmarkMain {
                 }
             }
 
-            let inflightSemaphore = DispatchSemaphore(value: config.workerCount)
+            let inflightSemaphore = DispatchSemaphore(value: max(config.workerCount, config.pipelineQueueDepth))
             let processingGroup = DispatchGroup()
             let resultLock = NSLock()
 
@@ -247,6 +281,20 @@ struct Phase4AAHQBenchmarkMain {
             }
 
             processingGroup.wait()
+
+            stage("draining gpu inflight queues")
+            for processor in processors {
+                do {
+                    try processor.waitForIdle()
+                } catch {
+                    resultLock.lock()
+                    if firstError == nil {
+                        firstError = error
+                    }
+                    resultLock.unlock()
+                }
+            }
+
             let elapsed = max(Date().timeIntervalSince(t0), 0.0001)
 
             if let firstError {

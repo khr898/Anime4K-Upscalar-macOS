@@ -248,7 +248,7 @@ final class A4KFilePipeline {
         self.device = device
         self.library = library
                 self.targetOutputScale = max(1.0, targetOutputScale)
-        let rawTargetThreads = Int(ProcessInfo.processInfo.environment["A4K_TARGET_THREADGROUP_THREADS"] ?? "256") ?? 256
+        let rawTargetThreads = Int(ProcessInfo.processInfo.environment["A4K_TARGET_THREADGROUP_THREADS"] ?? "512") ?? 512
         self.targetThreadgroupThreads = max(64, min(1024, rawTargetThreads))
 
         do {

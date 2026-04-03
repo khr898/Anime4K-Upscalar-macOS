@@ -16,6 +16,7 @@
 		2FE15FAEAF8C91BE64BC90D0 /* Anime4K_Restore_CNN_S.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 777B1166CCE228F09C178993 /* Anime4K_Restore_CNN_S.glsl */; };
 		319E3EB1EC71EDA162A22364 /* Anime4K_Clamp_Highlights.metal in Sources */ = {isa = PBXBuildFile; fileRef = 30FB0A191045A177C4777C87 /* Anime4K_Clamp_Highlights.metal */; };
 		33021BE5E2524B9B27DFF7E9 /* Anime4K_Upscale_CNN_x2_M.metal in Sources */ = {isa = PBXBuildFile; fileRef = 66324A7D41BEF2421E1B97F0 /* Anime4K_Upscale_CNN_x2_M.metal */; };
+		3CB7F77A415EBDDA6DF91216 /* phase4_aahq_benchmark.swift in Sources */ = {isa = PBXBuildFile; fileRef = D0207AC98CF241C04B4FFFFF /* phase4_aahq_benchmark.swift */; };
 		3DFC521C94DE2D4097CCB5BB /* Models.swift in Sources */ = {isa = PBXBuildFile; fileRef = A19063BF4FF89203EC323802 /* Models.swift */; };
 		4384BA35284326BCE52FB91E /* Anime4K_Restore_CNN_Soft_M.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 1F5548C5F7ADD7830955545E /* Anime4K_Restore_CNN_Soft_M.glsl */; };
 		48523504D7521577DCB48B67 /* ProcessingView.swift in Sources */ = {isa = PBXBuildFile; fileRef = D4E7851AE8603F684A5F07AA /* ProcessingView.swift */; };
@@ -45,6 +46,7 @@
 		B8A4B3251FC34B68447469C1 /* Anime4K_Upscale_Denoise_CNN_x2_M.metal in Sources */ = {isa = PBXBuildFile; fileRef = 78547B723FBE25485213FAC6 /* Anime4K_Upscale_Denoise_CNN_x2_M.metal */; };
 		C0374F025116D3C9E5BC10A5 /* Anime4K_Restore_CNN_VL.glsl in Resources */ = {isa = PBXBuildFile; fileRef = 13386A1A8D2E9F1EC1B4A9F7 /* Anime4K_Restore_CNN_VL.glsl */; };
 		C1921FB64741D7AEB25E5A1A /* ConfigurationPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 286C375B47DB82B67FE79854 /* ConfigurationPanel.swift */; };
+		C8A60D7852B00E781DAE2D78 /* run_phase4_aahq_benchmark.zsh in Resources */ = {isa = PBXBuildFile; fileRef = A45A6393C556AEA9FE425CEC /* run_phase4_aahq_benchmark.zsh */; };
 		CADBC497E4C2CB21ED05DA09 /* Anime4K_UpscalerApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 670F2DCCD6218A17FFD998CF /* Anime4K_UpscalerApp.swift */; };
 		CC1BF979682134E68D67D39A /* Anime4K_Restore_CNN_M.metal in Sources */ = {isa = PBXBuildFile; fileRef = 6E1C4CF9BB76AF48E3CB8E00 /* Anime4K_Restore_CNN_M.metal */; };
 		CD1D76DA93E214E521F7E844 /* Anime4K_Upscale_CNN_x2_VL.metal in Sources */ = {isa = PBXBuildFile; fileRef = 8302D1FCEF9407458B78D75D /* Anime4K_Upscale_CNN_x2_VL.metal */; };
@@ -98,6 +100,7 @@
 		9B323107B0B004C2901C8369 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl */ = {isa = PBXFileReference; path = Anime4K_Upscale_Denoise_CNN_x2_VL.glsl; sourceTree = "<group>"; };
 		A0C53583933AE8354D6DF90F /* SecurityScopeManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityScopeManager.swift; sourceTree = "<group>"; };
 		A19063BF4FF89203EC323802 /* Models.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Models.swift; sourceTree = "<group>"; };
+		A45A6393C556AEA9FE425CEC /* run_phase4_aahq_benchmark.zsh */ = {isa = PBXFileReference; path = run_phase4_aahq_benchmark.zsh; sourceTree = "<group>"; };
 		A4D72B61E8E7834F484AC97C /* Anime4K_Upscale_Denoise_CNN_x2_VL.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Anime4K_Upscale_Denoise_CNN_x2_VL.metal; sourceTree = "<group>"; };
 		AC0AA91493DD42C7B047A114 /* Anime4K_AutoDownscalePre_x2.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Anime4K_AutoDownscalePre_x2.metal; sourceTree = "<group>"; };
 		B4B69E49C638E7683925DF97 /* Anime4K_Restore_CNN_Soft_M.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Anime4K_Restore_CNN_Soft_M.metal; sourceTree = "<group>"; };
@@ -105,6 +108,7 @@
 		BA65557BF36E55224D10E8A3 /* FileListView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FileListView.swift; sourceTree = "<group>"; };
 		BB8F9D56685BAB0B112093E3 /* Anime4K_Restore_CNN_VL.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Anime4K_Restore_CNN_VL.metal; sourceTree = "<group>"; };
 		CA6D8287A51700AD60CE6C09 /* ProgressRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProgressRow.swift; sourceTree = "<group>"; };
+		D0207AC98CF241C04B4FFFFF /* phase4_aahq_benchmark.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = phase4_aahq_benchmark.swift; sourceTree = "<group>"; };
 		D4E7851AE8603F684A5F07AA /* ProcessingView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ProcessingView.swift; sourceTree = "<group>"; };
 		D8561EC459E056C564C9D64E /* Anime4KRuntimePipeline.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Anime4KRuntimePipeline.swift; sourceTree = "<group>"; };
 		E20EB53AC70827683E15997E /* AppViewModel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppViewModel.swift; sourceTree = "<group>"; };
@@ -145,6 +149,7 @@
 			children = (
 				A8147C0DB1FDC2FA260C8308 /* Models */,
 				388BD0FB621A48ED96C2CDF1 /* Resources */,
+				76795B2FE75F83A01F69135E /* Tools */,
 				0BEA93A88E3229ED7D58A1E6 /* Utilities */,
 				89189A803E2C9A2FA7ED5256 /* ViewModels */,
 				156437D7D09397E0D3299677 /* Views */,
@@ -191,6 +196,15 @@
 				A4D72B61E8E7834F484AC97C /* Anime4K_Upscale_Denoise_CNN_x2_VL.metal */,
 			);
 			path = metal_sources;
+			sourceTree = "<group>";
+		};
+		76795B2FE75F83A01F69135E /* Tools */ = {
+			isa = PBXGroup;
+			children = (
+				D0207AC98CF241C04B4FFFFF /* phase4_aahq_benchmark.swift */,
+				A45A6393C556AEA9FE425CEC /* run_phase4_aahq_benchmark.zsh */,
+			);
+			path = Tools;
 			sourceTree = "<group>";
 		};
 		854CD1B655FBC93612C07FC1 /* Compress */ = {
@@ -359,6 +373,7 @@
 				90D33D19D2D6C4AED02F8DE2 /* Anime4K_Upscale_Denoise_CNN_x2_M.glsl in Resources */,
 				587EE35E38AF6AD6114C8484 /* Anime4K_Upscale_Denoise_CNN_x2_VL.glsl in Resources */,
 				F17BC2B90A3BF8D77B91C430 /* Assets.xcassets in Resources */,
+				C8A60D7852B00E781DAE2D78 /* run_phase4_aahq_benchmark.zsh in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -429,6 +444,7 @@
 				9D7AA03BA6CEB87009AB064D /* StreamOptimizeView.swift in Sources */,
 				661B50E3876C482F113BF492 /* StreamOptimizeViewModel.swift in Sources */,
 				4CE7E1BAEDEF542413E5B9AA /* UpscaleView.swift in Sources */,
+				3CB7F77A415EBDDA6DF91216 /* phase4_aahq_benchmark.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

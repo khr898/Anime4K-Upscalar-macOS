@@ -478,6 +478,7 @@ final class Anime4KOfflineProcessor {
         case runtimeCompileFailed(String)
         case runtimeEncodeFailed(String)
         case failedToCreateConverterEncoder
+        case failedToCreatePixelBufferTexture
         case commandBufferFailed(String)
 
         var errorDescription: String? {
@@ -508,6 +509,8 @@ final class Anime4KOfflineProcessor {
                 return "Failed to encode runtime stage: \(shader)"
             case .failedToCreateConverterEncoder:
                 return "Failed to create converter encoder"
+            case .failedToCreatePixelBufferTexture:
+                return "Failed to create Metal texture from decoded pixel buffer"
             case let .commandBufferFailed(detail):
                 return "Metal command buffer failed: \(detail)"
             }
@@ -517,11 +520,13 @@ final class Anime4KOfflineProcessor {
     private let device: MTLDevice
     private let commandQueue: MTLCommandQueue
     private let converterPipeline: MTLComputePipelineState
+    private let converterTargetThreadgroupThreads: Int
     private let targetOutputScale: Float
     private let stageNames: [String]
     private let forceTexelCenterCoordinates: Bool
     private let perfStatsEnabled: Bool
     private let perfLogInterval: Int
+    private let noReadbackInflightDepth: Int
 
     let requestedBackend: A4KComputeBackend
     private(set) var activeBackend: A4KComputeBackend
@@ -529,7 +534,10 @@ final class Anime4KOfflineProcessor {
     private var filePipelines: [A4KFilePipeline] = []
     private var inputTexture: MTLTexture?
     private var readbackTexture: MTLTexture?
+    private var cvTextureCache: CVMetalTextureCache?
     private var coreMLBackend: A4KCoreMLBackend?
+    private var pendingNoReadbackBuffers: [MTLCommandBuffer] = []
+    private let pendingNoReadbackLock = NSLock()
 
     private struct StagePerfStats {
         var compileCheckTotalMs: Double = 0
@@ -583,6 +591,10 @@ final class Anime4KOfflineProcessor {
         self.perfStatsEnabled = env["A4K_PERF_STATS"] == "1"
         let rawPerfInterval = Int(env["A4K_PERF_LOG_INTERVAL"] ?? "120") ?? 120
         self.perfLogInterval = max(30, rawPerfInterval)
+        let rawConverterThreads = Int(env["A4K_CONVERTER_TG_THREADS"] ?? "512") ?? 512
+        self.converterTargetThreadgroupThreads = max(64, min(1024, rawConverterThreads))
+        let rawNoReadbackInflight = Int(env["A4K_NO_READBACK_INFLIGHT"] ?? env["A4K_BENCH_GPU_INFLIGHT"] ?? "1") ?? 1
+        self.noReadbackInflightDepth = max(1, min(8, rawNoReadbackInflight))
         self.requestedBackend = computeBackend ?? A4KComputeBackend.resolve(from: env)
 
         if requestedBackend == .coreML {
@@ -605,6 +617,9 @@ final class Anime4KOfflineProcessor {
         NSLog("[Anime4KOffline] backend requested=%@ active=%@", requestedBackend.rawValue, activeBackend.rawValue)
         if perfStatsEnabled {
             NSLog("[A4KPerf] Enabled stage timing (logInterval=%d)", perfLogInterval)
+        }
+        if noReadbackInflightDepth > 1 {
+            NSLog("[Anime4KOffline] No-readback inflight depth=%d", noReadbackInflightDepth)
         }
 
         let converterLibrary = try device.makeLibrary(source: Self.converterSource, options: nil)
@@ -658,7 +673,9 @@ final class Anime4KOfflineProcessor {
         targetOutputHeight: Int,
         outputFrame: inout Data
     ) throws -> (width: Int, height: Int) {
-        try processFrameInternal(
+        try waitForIdle()
+
+        return try processFrameInternal(
             inputFrame: inputFrame,
             inputWidth: inputWidth,
             inputHeight: inputHeight,
@@ -695,6 +712,31 @@ final class Anime4KOfflineProcessor {
             targetOutputHeight: targetOutputHeight,
             outputFrame: &unused,
             includeReadback: false
+        )
+    }
+
+    /// Processes a decoded CVPixelBuffer frame.
+    ///
+    /// This keeps decode output on GPU by binding a Metal texture directly
+    /// via CVMetalTextureCache and avoids a CPU memcpy upload step.
+    func processPixelBuffer(
+        pixelBuffer: CVPixelBuffer,
+        nativeWidth: Int,
+        nativeHeight: Int,
+        targetOutputWidth: Int,
+        targetOutputHeight: Int,
+        outputFrame: inout Data
+    ) throws -> (width: Int, height: Int) {
+        try waitForIdle()
+
+        return try processPixelBufferInternal(
+            pixelBuffer: pixelBuffer,
+            nativeWidth: nativeWidth,
+            nativeHeight: nativeHeight,
+            targetOutputWidth: targetOutputWidth,
+            targetOutputHeight: targetOutputHeight,
+            outputFrame: &outputFrame,
+            includeReadback: true
         )
     }
 
@@ -787,14 +829,23 @@ final class Anime4KOfflineProcessor {
         )
 
         commandBuffer.commit()
-        commandBuffer.waitUntilCompleted()
-
-        if commandBuffer.status == .error {
-            let detail = commandBuffer.error?.localizedDescription ?? "unknown"
-            throw ProcessorError.commandBufferFailed(detail)
-        }
+        try enqueueNoReadbackCommandBuffer(commandBuffer)
 
         return (currentTexture.width, currentTexture.height)
+    }
+
+    /// Waits for any pending no-readback GPU work submitted by this processor.
+    func waitForIdle() throws {
+        let pending: [MTLCommandBuffer]
+        pendingNoReadbackLock.lock()
+        pending = pendingNoReadbackBuffers
+        pendingNoReadbackBuffers.removeAll(keepingCapacity: true)
+        pendingNoReadbackLock.unlock()
+
+        for commandBuffer in pending {
+            commandBuffer.waitUntilCompleted()
+            try validateCompletedCommandBuffer(commandBuffer)
+        }
     }
 
     private func processFrameInternal(
@@ -861,7 +912,96 @@ final class Anime4KOfflineProcessor {
 
         let grid = MTLSize(width: currentTexture.width, height: currentTexture.height, depth: 1)
         let tgWidth = max(1, converterPipeline.threadExecutionWidth)
-        let tgHeight = max(1, min(8, converterPipeline.maxTotalThreadsPerThreadgroup / tgWidth))
+        let maxHeight = max(1, converterPipeline.maxTotalThreadsPerThreadgroup / tgWidth)
+        let preferredHeight = max(1, converterTargetThreadgroupThreads / tgWidth)
+        let tgHeight = min(maxHeight, preferredHeight)
+        let tpg = MTLSize(width: tgWidth, height: tgHeight, depth: 1)
+
+        encoder.dispatchThreads(grid, threadsPerThreadgroup: tpg)
+        encoder.endEncoding()
+
+        commandBuffer.commit()
+        commandBuffer.waitUntilCompleted()
+
+        if commandBuffer.status == .error {
+            let detail = commandBuffer.error?.localizedDescription ?? "unknown"
+            throw ProcessorError.commandBufferFailed(detail)
+        }
+
+        let outBytesPerRow = currentTexture.width * 4
+        let outBytes = outBytesPerRow * currentTexture.height
+        if outputFrame.count != outBytes {
+            outputFrame = Data(count: outBytes)
+        }
+
+        outputFrame.withUnsafeMutableBytes { raw in
+            guard let base = raw.baseAddress else { return }
+            readbackTexture.getBytes(
+                base,
+                bytesPerRow: outBytesPerRow,
+                from: MTLRegionMake2D(0, 0, currentTexture.width, currentTexture.height),
+                mipmapLevel: 0
+            )
+        }
+
+        return (currentTexture.width, currentTexture.height)
+    }
+
+    private func processPixelBufferInternal(
+        pixelBuffer: CVPixelBuffer,
+        nativeWidth: Int,
+        nativeHeight: Int,
+        targetOutputWidth: Int,
+        targetOutputHeight: Int,
+        outputFrame: inout Data,
+        includeReadback: Bool
+    ) throws -> (width: Int, height: Int) {
+        guard let commandBuffer = commandQueue.makeCommandBuffer() else {
+            throw ProcessorError.failedToCreateCommandBuffer
+        }
+
+        guard let inputTexture = makeTexture(from: pixelBuffer) else {
+            throw ProcessorError.failedToCreatePixelBufferTexture
+        }
+
+        let currentTexture = try encodeRuntimeStages(
+            commandBuffer: commandBuffer,
+            inputTexture: inputTexture,
+            nativeWidth: nativeWidth,
+            nativeHeight: nativeHeight,
+            targetOutputWidth: targetOutputWidth,
+            targetOutputHeight: targetOutputHeight
+        )
+
+        if !includeReadback {
+            commandBuffer.commit()
+            commandBuffer.waitUntilCompleted()
+
+            if commandBuffer.status == .error {
+                let detail = commandBuffer.error?.localizedDescription ?? "unknown"
+                throw ProcessorError.commandBufferFailed(detail)
+            }
+
+            return (currentTexture.width, currentTexture.height)
+        }
+
+        guard let readbackTexture = ensureReadbackTexture(width: currentTexture.width, height: currentTexture.height) else {
+            throw ProcessorError.failedToCreateReadbackTexture
+        }
+
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else {
+            throw ProcessorError.failedToCreateConverterEncoder
+        }
+
+        encoder.setComputePipelineState(converterPipeline)
+        encoder.setTexture(currentTexture, index: 0)
+        encoder.setTexture(readbackTexture, index: 1)
+
+        let grid = MTLSize(width: currentTexture.width, height: currentTexture.height, depth: 1)
+        let tgWidth = max(1, converterPipeline.threadExecutionWidth)
+        let maxHeight = max(1, converterPipeline.maxTotalThreadsPerThreadgroup / tgWidth)
+        let preferredHeight = max(1, converterTargetThreadgroupThreads / tgWidth)
+        let tgHeight = min(maxHeight, preferredHeight)
         let tpg = MTLSize(width: tgWidth, height: tgHeight, depth: 1)
 
         encoder.dispatchThreads(grid, threadsPerThreadgroup: tpg)
@@ -1018,6 +1158,34 @@ final class Anime4KOfflineProcessor {
         CFAbsoluteTimeGetCurrent() * 1000.0
     }
 
+    private func enqueueNoReadbackCommandBuffer(_ commandBuffer: MTLCommandBuffer) throws {
+        guard noReadbackInflightDepth > 1 else {
+            commandBuffer.waitUntilCompleted()
+            try validateCompletedCommandBuffer(commandBuffer)
+            return
+        }
+
+        var oldestBuffer: MTLCommandBuffer?
+        pendingNoReadbackLock.lock()
+        pendingNoReadbackBuffers.append(commandBuffer)
+        if pendingNoReadbackBuffers.count >= noReadbackInflightDepth {
+            oldestBuffer = pendingNoReadbackBuffers.removeFirst()
+        }
+        pendingNoReadbackLock.unlock()
+
+        if let oldestBuffer {
+            oldestBuffer.waitUntilCompleted()
+            try validateCompletedCommandBuffer(oldestBuffer)
+        }
+    }
+
+    private func validateCompletedCommandBuffer(_ commandBuffer: MTLCommandBuffer) throws {
+        if commandBuffer.status == .error {
+            let detail = commandBuffer.error?.localizedDescription ?? "unknown"
+            throw ProcessorError.commandBufferFailed(detail)
+        }
+    }
+
     private func ensureInputTexture(width: Int, height: Int) -> MTLTexture? {
         if let existing = inputTexture,
            existing.width == width,
@@ -1060,6 +1228,59 @@ final class Anime4KOfflineProcessor {
         return readbackTexture
     }
 
+    private func makeTexture(from pixelBuffer: CVPixelBuffer) -> MTLTexture? {
+        let width = CVPixelBufferGetWidth(pixelBuffer)
+        let height = CVPixelBufferGetHeight(pixelBuffer)
+        guard width > 0, height > 0 else {
+            return nil
+        }
+
+        let pixelFormat = CVPixelBufferGetPixelFormatType(pixelBuffer)
+        guard pixelFormat == kCVPixelFormatType_32BGRA else {
+            return nil
+        }
+
+        guard let textureCache = ensureCVTextureCache() else {
+            return nil
+        }
+
+        var cvTexture: CVMetalTexture?
+        let status = CVMetalTextureCacheCreateTextureFromImage(
+            kCFAllocatorDefault,
+            textureCache,
+            pixelBuffer,
+            nil,
+            .bgra8Unorm,
+            width,
+            height,
+            0,
+            &cvTexture
+        )
+
+        guard status == kCVReturnSuccess,
+              let cvTexture,
+              let texture = CVMetalTextureGetTexture(cvTexture) else {
+            return nil
+        }
+
+        return texture
+    }
+
+    private func ensureCVTextureCache() -> CVMetalTextureCache? {
+        if let existing = cvTextureCache {
+            return existing
+        }
+
+        var created: CVMetalTextureCache?
+        let status = CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &created)
+        guard status == kCVReturnSuccess, let created else {
+            return nil
+        }
+
+        cvTextureCache = created
+        return created
+    }
+
     private static let converterSource = """
     #include <metal_stdlib>
     using namespace metal;
@@ -1077,9 +1298,15 @@ final class Anime4KOfflineProcessor {
     """
 
     private static func normalizeTexelCenterCoordinates(in source: String) -> String {
-        source.replacingOccurrences(
-            of: "float2 outScale = 1.0 / (outSize - float2(1.0, 1.0));\n    float2 mtlPos = float2(gid) * outScale;",
-            with: "float2 mtlPos = (float2(gid) + float2(0.5, 0.5)) / outSize;"
+        var normalized = source
+        normalized = normalized.replacingOccurrences(
+            of: "float2 outScale = 1.0 / (outSize - float2(1.0, 1.0));",
+            with: "float2 outScale = 1.0 / outSize;"
         )
+        normalized = normalized.replacingOccurrences(
+            of: "float2 mtlPos = float2(gid) * outScale;",
+            with: "float2 mtlPos = (float2(gid) + float2(0.5, 0.5)) * outScale;"
+        )
+        return normalized
     }
 }
