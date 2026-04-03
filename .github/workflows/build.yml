@@ -43,6 +43,7 @@ jobs:
           -configuration Release \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_ALLOWED=NO \
+          EXCLUDED_SOURCE_FILE_NAMES="phase4_aahq_benchmark.swift" \
           SYMROOT=build
 
     - name: Normalize unsigned app bundle
