@@ -1,4 +1,5 @@
 name: Build and Release
+run-name: Release ${{ github.event.release.tag_name || github.ref_name }}
 on:
   release:
     types: [created]
@@ -36,7 +37,7 @@ jobs:
 
     - name: Build Xcode project
       run: |
-        xcodebuild build \
+        A4K_SKIP_ADHOC_SIGNING=1 xcodebuild build \
           -scheme "Anime4K-Upscaler" \
           -project "Anime4K-Upscaler.xcodeproj" \
           -configuration Release \
@@ -44,17 +45,48 @@ jobs:
           CODE_SIGNING_ALLOWED=NO \
           SYMROOT=build
 
+    - name: Normalize unsigned app bundle
+      run: |
+        APP_PATH="build/Release/Anime4K Upscaler.app"
+
+        if [[ ! -d "$APP_PATH" ]]; then
+          echo "Expected app bundle not found at: $APP_PATH"
+          exit 1
+        fi
+
+        # Remove any residual signatures to avoid mixed-signature runtime issues.
+        FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+        if [[ -d "$FRAMEWORKS_DIR" ]]; then
+          while IFS= read -r -d '' item; do
+            codesign --remove-signature "$item" 2>/dev/null || true
+          done < <(find "$FRAMEWORKS_DIR" -type f \( -name "*.dylib" -o -name "ffmpeg" -o -name "ffprobe" \) -print0)
+        fi
+        codesign --remove-signature "$APP_PATH" 2>/dev/null || true
+
     - name: Create DMG
       run: |
+        APP_PATH="build/Release/Anime4K Upscaler.app"
+        DMG_PATH="build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg"
+
         mkdir -p build/dmg
-        cp -R "build/Release/Anime4K Upscaler.app" build/dmg/
+        cp -R "$APP_PATH" build/dmg/
         ln -s /Applications build/dmg/Applications
-        # Appended _arm64 to the output file name
-        hdiutil create -volname "Anime4K Upscaler ${{ env.VERSION }}" -srcfolder build/dmg -ov -format UDZO "build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg"
+
+        hdiutil create \
+          -volname "Anime4K Upscaler ${{ env.VERSION }}" \
+          -srcfolder build/dmg \
+          -ov -format UDZO \
+          "$DMG_PATH"
+
+        echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
       with:
-        files: build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg
+        name: Anime4K Upscaler ${{ github.event.release.tag_name || github.ref_name }}
+        files: ${{ env.DMG_PATH }}
+        append_body: true
+        body: >-
+          This release is intentionally unsigned. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once. This build uses an unsigned-only packaging path to avoid mixed-signature launch crashes.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

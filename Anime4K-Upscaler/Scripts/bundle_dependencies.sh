@@ -20,6 +20,15 @@ mkdir -p "${FRAMEWORKS_DIR}"
 mkdir -p "${RESOURCES_DIR}/Shaders"
 mkdir -p "${METAL_SOURCES_DEST}"
 
+case "${A4K_SKIP_ADHOC_SIGNING:-0}" in
+    1|true|TRUE|yes|YES)
+        SKIP_ADHOC_SIGNING=1
+        ;;
+    *)
+        SKIP_ADHOC_SIGNING=0
+        ;;
+esac
+
 # --- 1. LOCATE FFMPEG & FFPROBE ---
 FFMPEG_BIN=$(which ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
 FFPROBE_BIN=$(which ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
@@ -269,13 +278,17 @@ else
     echo "warning: Could not locate translated .metal source directory"
 fi
 
-# --- 7. CODESIGN EVERYTHING ---
-echo "🔏 Codesigning all bundled binaries and dylibs..."
-for item in "${FRAMEWORKS_DIR}/ffmpeg" "${FRAMEWORKS_DIR}/ffprobe" "${FRAMEWORKS_DIR}"/*.dylib; do
-    [[ ! -f "$item" ]] && continue
-    codesign --force --sign - --timestamp=none "$item" 2>/dev/null || true
-    echo "  ✅ Signed: $(basename "$item")"
-done
+# --- 7. OPTIONAL AD-HOC CODESIGN ---
+if [[ "$SKIP_ADHOC_SIGNING" == "1" ]]; then
+    echo "⏭️  Skipping ad-hoc signing of bundled binaries (A4K_SKIP_ADHOC_SIGNING=1)."
+else
+    echo "🔏 Codesigning all bundled binaries and dylibs..."
+    for item in "${FRAMEWORKS_DIR}/ffmpeg" "${FRAMEWORKS_DIR}/ffprobe" "${FRAMEWORKS_DIR}"/*.dylib; do
+        [[ ! -f "$item" ]] && continue
+        codesign --force --sign - --timestamp=none "$item" 2>/dev/null || true
+        echo "  ✅ Signed: $(basename "$item")"
+    done
+fi
 
 echo ""
 echo "✅ Dependency bundling complete."
