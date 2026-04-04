@@ -16,3 +16,4 @@
 - Parallelism defaults were raised: ProcessingEngine now auto-scales worker count by active CPU cores/backend and sets a deeper queued frame pipeline (`A4K_PIPELINE_QUEUE_DEPTH`) to keep decode, workers, and GPU concurrently busy.
 - Runtime compute defaults now target 512 threads per threadgroup (`A4K_TARGET_THREADGROUP_THREADS`) and converter pass has its own tuning knob (`A4K_CONVERTER_TG_THREADS`) to better occupy GPU cores.
 - Benchmark harness now auto-chooses worker count by hardware/backend and exposes queue depth (`A4K_BENCH_QUEUE_DEPTH`) separately from GPU inflight depth.
+- For 30+ fps with minimal visual change, prioritize fixing MPS acceptance and ANE usage rather than replacing the Anime4K CNN model.
