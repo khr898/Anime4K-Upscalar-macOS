@@ -11,6 +11,9 @@ RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
 SHADERS_SRC="${SRCROOT}/Anime4K-Upscaler/Resources/Shaders"
 VENDORED_LIB_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredDylibs"
 VENDORED_LIBPLACEBO="${VENDORED_LIB_DIR}/libplacebo.351.dylib"
+VENDORED_TOOLS_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredTools"
+VENDORED_FFMPEG="${VENDORED_TOOLS_DIR}/ffmpeg"
+VENDORED_FFPROBE="${VENDORED_TOOLS_DIR}/ffprobe"
 
 case "${A4K_SKIP_ADHOC_SIGNING:-0}" in
     1|true|TRUE|yes|YES)
@@ -25,17 +28,23 @@ mkdir -p "${FRAMEWORKS_DIR}"
 mkdir -p "${RESOURCES_DIR}/Shaders"
 
 # --- 1. LOCATE FFMPEG & FFPROBE ---
-BREW_FFMPEG_PREFIX=""
-if command -v brew >/dev/null 2>&1; then
-    BREW_FFMPEG_PREFIX=$(brew --prefix ffmpeg 2>/dev/null || true)
-fi
-
-if [[ -n "$BREW_FFMPEG_PREFIX" && -x "$BREW_FFMPEG_PREFIX/bin/ffmpeg" ]]; then
-    FFMPEG_BIN="$BREW_FFMPEG_PREFIX/bin/ffmpeg"
-    FFPROBE_BIN="$BREW_FFMPEG_PREFIX/bin/ffprobe"
+if [[ -x "$VENDORED_FFMPEG" && -x "$VENDORED_FFPROBE" ]]; then
+    FFMPEG_BIN="$VENDORED_FFMPEG"
+    FFPROBE_BIN="$VENDORED_FFPROBE"
+    echo "📦 Using vendored ffmpeg tools from: $VENDORED_TOOLS_DIR"
 else
-    FFMPEG_BIN=$(command -v ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
-    FFPROBE_BIN=$(command -v ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
+    BREW_FFMPEG_PREFIX=""
+    if command -v brew >/dev/null 2>&1; then
+        BREW_FFMPEG_PREFIX=$(brew --prefix ffmpeg 2>/dev/null || true)
+    fi
+
+    if [[ -n "$BREW_FFMPEG_PREFIX" && -x "$BREW_FFMPEG_PREFIX/bin/ffmpeg" ]]; then
+        FFMPEG_BIN="$BREW_FFMPEG_PREFIX/bin/ffmpeg"
+        FFPROBE_BIN="$BREW_FFMPEG_PREFIX/bin/ffprobe"
+    else
+        FFMPEG_BIN=$(command -v ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
+        FFPROBE_BIN=$(command -v ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
+    fi
 fi
 
 if [[ ! -f "$FFMPEG_BIN" ]]; then
