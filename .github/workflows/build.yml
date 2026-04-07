@@ -59,10 +59,12 @@ jobs:
           -configuration Release \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_ALLOWED=NO \
+          CODE_SIGN_ENTITLEMENTS="" \
+          ENABLE_HARDENED_RUNTIME=NO \
           EXCLUDED_SOURCE_FILE_NAMES="phase4_aahq_benchmark.swift" \
           SYMROOT=build
 
-    - name: Normalize unsigned app bundle
+    - name: Normalize app signatures
       run: |
         APP_PATH="build/Release/Anime4K Upscaler.app"
 
@@ -78,6 +80,33 @@ jobs:
           done < <(find "$FRAMEWORKS_DIR" -type f \( -name "*.dylib" -o -name "ffmpeg" -o -name "ffprobe" \) -print0)
         fi
         codesign --remove-signature "$APP_PATH" 2>/dev/null || true
+
+        # Re-sign with ad-hoc identity so the bundle remains non-notarized but launchable.
+        codesign --force --deep --sign - --timestamp=none "$APP_PATH"
+
+    - name: Validate app signature state
+      run: |
+        APP_PATH="build/Release/Anime4K Upscaler.app"
+
+        SIGN_INFO="$(codesign -dv "$APP_PATH" 2>&1 || true)"
+
+        TEAM_ID="$(printf '%s\n' "$SIGN_INFO" | awk -F= '/^TeamIdentifier=/{print $2; exit}')"
+        if [[ "$TEAM_ID" != "not set" ]]; then
+          echo "error: expected ad-hoc TeamIdentifier 'not set', got '${TEAM_ID:-<none>}'"
+          exit 1
+        fi
+
+        SIGNING_AUTHORITY="$(printf '%s\n' "$SIGN_INFO" | awk -F= '/^Authority=/{print $2; exit}')"
+        if [[ -n "$SIGNING_AUTHORITY" && "$SIGNING_AUTHORITY" != "-" ]]; then
+          echo "error: expected ad-hoc signing authority when present, got '$SIGNING_AUTHORITY'"
+          exit 1
+        fi
+
+        if spctl --assess --type execute -vv "$APP_PATH"; then
+          echo "warning: app unexpectedly passed Gatekeeper assessment"
+        else
+          echo "Gatekeeper assessment rejected as expected for non-notarized build."
+        fi
 
     - name: Create DMG
       run: |
@@ -122,6 +151,6 @@ jobs:
         files: ${{ env.DMG_PATH }}
         append_body: true
         body: >-
-          This release is intentionally unsigned. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once.
+          This release is not Developer ID signed and not notarized. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
