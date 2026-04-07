@@ -121,6 +121,7 @@ final class ProcessingEngine {
                 process.executableURL = capturedFFmpegURL
                 process.arguments = capturedArguments
                 process.environment = capturedEnvironment
+                process.qualityOfService = .userInitiated
 
                 let stderrPipe = Pipe()
                 let stdoutPipe = Pipe()
@@ -148,7 +149,6 @@ final class ProcessingEngine {
                 nonisolated(unsafe) var lastStderrFlush = ContinuousClock.now
                 nonisolated(unsafe) var pendFrame: Int?
                 nonisolated(unsafe) var pendTime: String?
-                nonisolated(unsafe) var pendSpeed: String?
                 nonisolated(unsafe) var pendFps: String?
                 nonisolated(unsafe) var pendProgress: Double?
 
@@ -164,7 +164,6 @@ final class ProcessingEngine {
                         if let prog = FFmpegProgress.parse(line: lineStr) {
                             pendFrame = prog.frame
                             pendTime = prog.time
-                            pendSpeed = prog.speed
                             pendFps = String(format: "%.1f", prog.fps)
                             if capturedDuration > 0 {
                                 pendProgress = min(prog.timeSeconds / capturedDuration, 1.0)
@@ -178,16 +177,20 @@ final class ProcessingEngine {
                     let shouldFlush = (now - lastStderrFlush) >= .milliseconds(throttleMs)
 
                     if shouldFlush || !logBatch.isEmpty {
-                        let fr = pendFrame; let ti = pendTime; let sp = pendSpeed
-                        let fp = pendFps; let pr = pendProgress; let lg = logBatch
-                        pendFrame = nil; pendTime = nil; pendSpeed = nil
-                        pendFps = nil; pendProgress = nil
+                        let fr = pendFrame
+                        let ti = pendTime
+                        let fp = pendFps
+                        let pr = pendProgress
+                        let lg = logBatch
+                        pendFrame = nil
+                        pendTime = nil
+                        pendFps = nil
+                        pendProgress = nil
                         lastStderrFlush = now
 
                         Task { @MainActor in
                             if let v = fr { job.currentFrame = v }
                             if let v = ti { job.currentTime = v }
-                            if let v = sp { job.speed = v }
                             if let v = fp { job.fps = v }
                             if let v = pr { job.progress = v }
                             for l in lg { job.appendLog(l) }
@@ -198,9 +201,11 @@ final class ProcessingEngine {
                 // --- Throttled stdout state ---
                 nonisolated(unsafe) var lastStdoutFlush = ContinuousClock.now
                 nonisolated(unsafe) var soProgress: Double?
-                nonisolated(unsafe) var soSpeed: String?
                 nonisolated(unsafe) var soFps: String?
                 nonisolated(unsafe) var soFrame: Int?
+                nonisolated(unsafe) var soMediaSeconds: Double?
+                nonisolated(unsafe) var firstMetricWallDate: Date?
+                nonisolated(unsafe) var firstMetricMediaSeconds: Double?
 
                 stdoutHandle.readabilityHandler = { handle in
                     let data = handle.availableData
@@ -213,15 +218,21 @@ final class ProcessingEngine {
                     // to eliminate per-line Array<Substring> allocation.
                     for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
                         if line.hasPrefix("out_time_us=") {
-                            if let us = Double(line.dropFirst(12)), capturedDuration > 0 {
-                                soProgress = min((us / 1_000_000.0) / capturedDuration, 1.0)
+                            if let us = Double(line.dropFirst(12)) {
+                                let mediaSeconds = us / 1_000_000.0
+                                soMediaSeconds = mediaSeconds
+                                if capturedDuration > 0 {
+                                    soProgress = min(mediaSeconds / capturedDuration, 1.0)
+                                }
                             }
                         } else if line.hasPrefix("out_time_ms=") {
-                            if let us = Double(line.dropFirst(12)), capturedDuration > 0 {
-                                soProgress = min((us / 1_000_000.0) / capturedDuration, 1.0)
+                            if let us = Double(line.dropFirst(12)) {
+                                let mediaSeconds = us / 1_000_000.0
+                                soMediaSeconds = mediaSeconds
+                                if capturedDuration > 0 {
+                                    soProgress = min(mediaSeconds / capturedDuration, 1.0)
+                                }
                             }
-                        } else if line.hasPrefix("speed=") {
-                            soSpeed = String(line.dropFirst(6))
                         } else if line.hasPrefix("fps=") {
                             soFps = String(line.dropFirst(4))
                         } else if line.hasPrefix("frame=") {
@@ -231,15 +242,40 @@ final class ProcessingEngine {
 
                     let now = ContinuousClock.now
                     if (now - lastStdoutFlush) >= .milliseconds(throttleMs) {
-                        let p = soProgress; let s = soSpeed; let f = soFps; let fr = soFrame
-                        soProgress = nil; soSpeed = nil; soFps = nil; soFrame = nil
+                        let p = soProgress
+                        let f = soFps
+                        let fr = soFrame
+                        let mediaSeconds = soMediaSeconds
+                        soProgress = nil
+                        soFps = nil
+                        soFrame = nil
+                        soMediaSeconds = nil
                         lastStdoutFlush = now
 
                         Task { @MainActor in
                             if let v = p { job.progress = v }
-                            if let v = s { job.speed = v }
                             if let v = f { job.fps = v }
                             if let v = fr { job.currentFrame = v }
+
+                            if let mediaSeconds {
+                                if firstMetricWallDate == nil && mediaSeconds > 0 {
+                                    firstMetricWallDate = Date()
+                                    firstMetricMediaSeconds = mediaSeconds
+                                }
+
+                                if let startWall = firstMetricWallDate,
+                                   let startMedia = firstMetricMediaSeconds {
+                                    let elapsed = max(Date().timeIntervalSince(startWall), 0.001)
+                                    let mediaDelta = max(mediaSeconds - startMedia, 0.0)
+
+                                    if elapsed >= 0.35, mediaDelta > 0 {
+                                        let speed = mediaDelta / elapsed
+                                        job.speed = String(format: "x%.3f", speed)
+                                    } else {
+                                        job.speed = "warming..."
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -251,13 +287,11 @@ final class ProcessingEngine {
                     // Flush any remaining pending values
                     let fFrame = pendFrame ?? soFrame
                     let fProg = pendProgress ?? soProgress
-                    let fSpeed = pendSpeed ?? soSpeed
                     let fFps = pendFps ?? soFps
 
                     Task { @MainActor [weak self] in
                         if let v = fFrame { job.currentFrame = v }
                         if let v = fProg { job.progress = v }
-                        if let v = fSpeed { job.speed = v }
                         if let v = fFps { job.fps = v }
 
                         job.endDate = Date()

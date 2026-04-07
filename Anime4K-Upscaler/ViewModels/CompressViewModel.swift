@@ -342,9 +342,11 @@ final class CompressViewModel {
                 nonisolated(unsafe) var lastFlush = ContinuousClock.now
                 nonisolated(unsafe) var pendFrame: Int?
                 nonisolated(unsafe) var pendTime: String?
-                nonisolated(unsafe) var pendSpeed: String?
                 nonisolated(unsafe) var pendFps: String?
+                nonisolated(unsafe) var pendProcessedSeconds: Double?
                 nonisolated(unsafe) var pendProgress: Double?
+                nonisolated(unsafe) var firstMetricWallDate: Date?
+                nonisolated(unsafe) var firstMetricTimeSeconds: Double?
 
                 stderrHandle.readabilityHandler = { handle in
                     let data = handle.availableData
@@ -358,8 +360,8 @@ final class CompressViewModel {
                         if let prog = FFmpegProgress.parse(line: lineStr) {
                             pendFrame = prog.frame
                             pendTime = prog.time
-                            pendSpeed = prog.speed
                             pendFps = String(format: "%.1f", prog.fps)
+                            pendProcessedSeconds = prog.timeSeconds
                             if capturedDuration > 0 {
                                 pendProgress = min(prog.timeSeconds / capturedDuration, 1.0)
                             }
@@ -370,17 +372,42 @@ final class CompressViewModel {
 
                     let now = ContinuousClock.now
                     if (now - lastFlush) >= .milliseconds(throttleMs) || !logBatch.isEmpty {
-                        let fr = pendFrame; let ti = pendTime; let sp = pendSpeed
-                        let fp = pendFps; let pr = pendProgress; let lg = logBatch
-                        pendFrame = nil; pendTime = nil; pendSpeed = nil
-                        pendFps = nil; pendProgress = nil
+                        let fr = pendFrame
+                        let ti = pendTime
+                        let fp = pendFps
+                        let ps = pendProcessedSeconds
+                        let pr = pendProgress
+                        let lg = logBatch
+                        pendFrame = nil
+                        pendTime = nil
+                        pendFps = nil
+                        pendProcessedSeconds = nil
+                        pendProgress = nil
                         lastFlush = now
 
                         Task { @MainActor in
                             if let v = fr { job.currentFrame = v }
                             if let v = ti { job.currentTime = v }
-                            if let v = sp { job.speed = v }
                             if let v = fp { job.fps = v }
+                            if let processedSeconds = ps {
+                                if firstMetricWallDate == nil && processedSeconds > 0 {
+                                    firstMetricWallDate = Date()
+                                    firstMetricTimeSeconds = processedSeconds
+                                }
+
+                                if let startWall = firstMetricWallDate,
+                                   let startProcessed = firstMetricTimeSeconds {
+                                    let elapsed = max(Date().timeIntervalSince(startWall), 0.001)
+                                    let mediaDelta = max(processedSeconds - startProcessed, 0.0)
+
+                                    if elapsed >= 0.35, mediaDelta > 0 {
+                                        let speed = mediaDelta / elapsed
+                                        job.speed = String(format: "x%.3f", speed)
+                                    } else {
+                                        job.speed = "warming..."
+                                    }
+                                }
+                            }
                             if let v = pr { job.progress = v }
                             for l in lg { job.appendLog(l) }
                         }

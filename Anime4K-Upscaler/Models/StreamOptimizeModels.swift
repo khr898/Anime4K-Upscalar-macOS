@@ -25,9 +25,12 @@ enum StreamEncoder: String, CaseIterable, Identifiable, Sendable {
 
     var subtitle: String {
         switch self {
-        case .hevcVideoToolbox: return "VideoToolbox GPU — Best balance of quality, size & compatibility"
-        case .h264VideoToolbox: return "VideoToolbox GPU — Maximum device compatibility"
-        case .svtAV1:           return "SVT-AV1 CPU — Best compression, modern players only"
+        case .hevcVideoToolbox:
+            return "VideoToolbox on \(DeviceHardwareProfile.current.gpuName) — Best balance of quality, size & compatibility"
+        case .h264VideoToolbox:
+            return "VideoToolbox on \(DeviceHardwareProfile.current.gpuName) — Maximum device compatibility"
+        case .svtAV1:
+            return "SVT-AV1 on \(DeviceHardwareProfile.current.cpuCoreCount)-core CPU — Best compression, modern players only"
         }
     }
 

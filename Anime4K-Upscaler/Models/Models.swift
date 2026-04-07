@@ -4,6 +4,40 @@
 import Foundation
 import SwiftUI
 import Observation
+import Metal
+
+// MARK: - Device Hardware Profile
+
+struct DeviceHardwareProfile {
+    let chipName: String
+    let gpuName: String
+    let cpuCoreCount: Int
+
+    static let current: DeviceHardwareProfile = {
+        let processInfo = ProcessInfo.processInfo
+        let cpuCount = max(1, processInfo.activeProcessorCount)
+        let gpu = MTLCreateSystemDefaultDevice()?.name ?? "Default GPU"
+
+        var chip = "This Mac"
+        var size: size_t = 0
+        if sysctlbyname("machdep.cpu.brand_string", nil, &size, nil, 0) == 0, size > 0 {
+            var buffer = [CChar](repeating: 0, count: size)
+            if sysctlbyname("machdep.cpu.brand_string", &buffer, &size, nil, 0) == 0 {
+                chip = String(cString: buffer).trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        if chip.isEmpty {
+            chip = processInfo.hostName
+        }
+
+        return DeviceHardwareProfile(chipName: chip, gpuName: gpu, cpuCoreCount: cpuCount)
+    }()
+
+    var hqModeHeader: String {
+        "HQ Modes (Recommended for \(chipName))"
+    }
+}
 
 // MARK: - Anime4K Shader Files
 
@@ -237,11 +271,20 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
 
 /// Grouping for sectioned picker display.
 enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
-    case hq        = "HQ Modes (Recommended for M3 Pro)"
+    case hq        = "HQ Modes"
     case fast      = "Fast Modes"
     case noUpscale = "No Upscale Modes (Restore Only)"
 
     var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .hq:
+            return DeviceHardwareProfile.current.hqModeHeader
+        case .fast, .noUpscale:
+            return rawValue
+        }
+    }
 
     /// The SF Symbol for each category's section header.
     var symbolName: String {
@@ -315,8 +358,10 @@ enum VideoCodec: String, CaseIterable, Identifiable, Sendable {
 
     var subtitle: String {
         switch self {
-        case .hevcVideoToolbox: return "VideoToolbox GPU — Best speed & battery"
-        case .svtAV1:           return "SVT-AV1 CPU — Best compression, heavy CPU"
+        case .hevcVideoToolbox:
+            return "VideoToolbox on \(DeviceHardwareProfile.current.gpuName) — Best speed & battery"
+        case .svtAV1:
+            return "SVT-AV1 on \(DeviceHardwareProfile.current.cpuCoreCount)-core CPU — Best compression"
         }
     }
 
@@ -832,6 +877,7 @@ struct FFmpegArgumentBuilder {
 
         // Overwrite output, input file
         args.append(contentsOf: ["-y"])
+        args.append(contentsOf: ["-threads", "0"])
         args.append(contentsOf: ["-i", inputURL.path])
 
         // Vulkan hardware device init (required for libplacebo)

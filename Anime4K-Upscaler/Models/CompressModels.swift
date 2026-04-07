@@ -23,8 +23,10 @@ enum CompressEncoder: String, CaseIterable, Identifiable, Sendable {
 
     var subtitle: String {
         switch self {
-        case .hevcVideoToolbox: return "VideoToolbox GPU — Fastest encoding"
-        case .svtAV1:           return "SVT-AV1 CPU — Maximum storage saving"
+        case .hevcVideoToolbox:
+            return "VideoToolbox on \(DeviceHardwareProfile.current.gpuName) — Fastest encoding"
+        case .svtAV1:
+            return "SVT-AV1 on \(DeviceHardwareProfile.current.cpuCoreCount)-core CPU — Maximum storage saving"
         }
     }
 

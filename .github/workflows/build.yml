@@ -1,4 +1,5 @@
 name: Build and Release
+run-name: Release ${{ github.event.release.tag_name || github.ref_name }}
 on:
   release:
     types: [created]
@@ -17,15 +18,31 @@ jobs:
       uses: actions/checkout@v4
 
     - name: Install Dependencies
-      run: brew install ffmpeg xcodegen
+      run: brew install ffmpeg molten-vk xcodegen
 
-    - name: Get the version (and strip 'v' prefix if present)
+    - name: Resolve release tag and version
       id: get_version
       run: |
-        # Uses release tag if available, otherwise falls back to ref_name
-        TAG_NAME="${{ github.event.release.tag_name || github.ref_name }}"
-        # Removes the 'v' (e.g., v1.0.0 becomes 1.0.0) so Xcode doesn't complain
-        echo "VERSION=${TAG_NAME#v}" >> $GITHUB_ENV
+        TAG_FROM_RELEASE="${{ github.event.release.tag_name || '' }}"
+        TAG_FROM_REF="${{ github.ref_name }}"
+
+        if [[ -n "$TAG_FROM_RELEASE" ]]; then
+          RAW_TAG="$TAG_FROM_RELEASE"
+          if [[ -n "$TAG_FROM_REF" && "$TAG_FROM_REF" != "$TAG_FROM_RELEASE" ]]; then
+            echo "error: ref tag ($TAG_FROM_REF) does not match release tag ($TAG_FROM_RELEASE)"
+            exit 1
+          fi
+        else
+          RAW_TAG="$TAG_FROM_REF"
+        fi
+
+        if [[ -z "$RAW_TAG" ]]; then
+          echo "error: unable to resolve release tag"
+          exit 1
+        fi
+
+        echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
+        echo "VERSION=${RAW_TAG#v}" >> "$GITHUB_ENV"
 
     - name: Update version number
       run: |
@@ -36,25 +53,75 @@ jobs:
 
     - name: Build Xcode project
       run: |
-        xcodebuild build \
+        A4K_SKIP_ADHOC_SIGNING=1 xcodebuild build \
           -scheme "Anime4K-Upscaler" \
           -project "Anime4K-Upscaler.xcodeproj" \
           -configuration Release \
           CODE_SIGN_IDENTITY="" \
           CODE_SIGNING_ALLOWED=NO \
+          EXCLUDED_SOURCE_FILE_NAMES="phase4_aahq_benchmark.swift" \
           SYMROOT=build
+
+    - name: Normalize unsigned app bundle
+      run: |
+        APP_PATH="build/Release/Anime4K Upscaler.app"
+
+        if [[ ! -d "$APP_PATH" ]]; then
+          echo "Expected app bundle not found at: $APP_PATH"
+          exit 1
+        fi
+
+        FRAMEWORKS_DIR="$APP_PATH/Contents/Frameworks"
+        if [[ -d "$FRAMEWORKS_DIR" ]]; then
+          while IFS= read -r -d '' item; do
+            codesign --remove-signature "$item" 2>/dev/null || true
+          done < <(find "$FRAMEWORKS_DIR" -type f \( -name "*.dylib" -o -name "ffmpeg" -o -name "ffprobe" \) -print0)
+        fi
+        codesign --remove-signature "$APP_PATH" 2>/dev/null || true
 
     - name: Create DMG
       run: |
+        APP_PATH="build/Release/Anime4K Upscaler.app"
+        DMG_PATH="build/Anime4K_Upscaler_${{ env.RAW_TAG }}_arm64.dmg"
+
         mkdir -p build/dmg
-        cp -R "build/Release/Anime4K Upscaler.app" build/dmg/
+        cp -R "$APP_PATH" build/dmg/
         ln -s /Applications build/dmg/Applications
-        # Appended _arm64 to the output file name
-        hdiutil create -volname "Anime4K Upscaler ${{ env.VERSION }}" -srcfolder build/dmg -ov -format UDZO "build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg"
+
+        hdiutil create \
+          -volname "Anime4K Upscaler ${{ env.VERSION }}" \
+          -srcfolder build/dmg \
+          -ov -format UDZO \
+          "$DMG_PATH"
+
+        echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
+
+    - name: Validate bundled runtime dependencies
+      run: |
+        FRAMEWORKS_DIR="build/Release/Anime4K Upscaler.app/Contents/Frameworks"
+        REQUIRED=(
+          "ffmpeg"
+          "ffprobe"
+          "libMoltenVK.dylib"
+        )
+
+        for item in "${REQUIRED[@]}"; do
+          if [[ ! -f "$FRAMEWORKS_DIR/$item" ]]; then
+            echo "error: missing bundled dependency: $item"
+            exit 1
+          fi
+        done
+
+        echo "Bundled runtime dependency check passed."
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
       with:
-        files: build/Anime4K_Upscaler_${{ env.VERSION }}_arm64.dmg
+        tag_name: ${{ env.RAW_TAG }}
+        name: Anime4K Upscaler ${{ env.RAW_TAG }}
+        files: ${{ env.DMG_PATH }}
+        append_body: true
+        body: >-
+          This release is intentionally unsigned. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
