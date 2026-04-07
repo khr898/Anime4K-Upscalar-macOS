@@ -880,8 +880,7 @@ struct FFmpegArgumentBuilder {
         args.append(contentsOf: ["-threads", "0"])
         args.append(contentsOf: ["-i", inputURL.path])
 
-        // Vulkan hardware device init (required for libplacebo)
-        args.append(contentsOf: ["-init_hw_device", "vulkan"])
+        // Let libplacebo initialize its device backend; explicit init can fail on some systems.
 
         // Video filter graph
         args.append(contentsOf: ["-vf", filterGraph])

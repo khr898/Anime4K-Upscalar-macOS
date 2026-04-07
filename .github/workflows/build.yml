@@ -17,6 +17,14 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
+    - name: Select latest stable Xcode
+      uses: maxim-lobanov/setup-xcode@v1
+      with:
+        xcode-version: latest-stable
+
+    - name: Show Xcode version
+      run: xcodebuild -version
+
     - name: Install Dependencies
       run: brew install ffmpeg molten-vk xcodegen
 
