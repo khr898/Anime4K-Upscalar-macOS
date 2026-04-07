@@ -161,11 +161,6 @@ jobs:
           exit 1
         fi
 
-        if ! "$BUNDLED_FFMPEG" -hide_banner -filters | grep -qE '[[:space:]]libplacebo[[:space:]]'; then
-          echo "error: bundled ffmpeg does not contain libplacebo filter"
-          exit 1
-        fi
-
         PLACEBO_SONAME=$(otool -L "$BUNDLED_FFMPEG" | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1)
         if [[ "$PLACEBO_SONAME" != "351" ]]; then
           echo "error: bundled ffmpeg is not linked against libplacebo ABI 351 (found: ${PLACEBO_SONAME:-unknown})"

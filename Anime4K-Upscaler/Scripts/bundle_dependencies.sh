@@ -60,22 +60,16 @@ fi
 echo "📦 Bundling ffmpeg from: $FFMPEG_BIN"
 echo "📦 Bundling ffprobe from: $FFPROBE_BIN"
 
-# Enforce libplacebo-backed ffmpeg. Fail fast if ffmpeg was built without the filter.
-if ! "$FFMPEG_BIN" -hide_banner -filters 2>/dev/null | grep -qE '[[:space:]]libplacebo[[:space:]]'; then
-    echo "error: selected ffmpeg does not include libplacebo filter support"
+# Enforce libplacebo-backed ffmpeg using linkage checks (works even when
+# the binary cannot execute in CI prior to relocation/rewrite).
+PLACEBO_ABI=$(otool -L "$FFMPEG_BIN" 2>/dev/null | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1)
+if [[ "$PLACEBO_ABI" != "351" ]]; then
+    echo "error: selected ffmpeg is not linked against libplacebo ABI 351"
     echo "error: selected ffmpeg path: $FFMPEG_BIN"
+    echo "error: detected ABI: ${PLACEBO_ABI:-none}"
     exit 1
 fi
-
-PLACEBO_VERSION=$(
-    pkg-config --modversion libplacebo 2>/dev/null \
-    || otool -L "$FFMPEG_BIN" 2>/dev/null | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1
-)
-if [[ "$PLACEBO_VERSION" != "7.351.0" && "$PLACEBO_VERSION" != "351" ]]; then
-    echo "error: required libplacebo version is 7.351.0 (ABI 351), found: ${PLACEBO_VERSION:-unknown}"
-    exit 1
-fi
-echo "✅ Using libplacebo version: $PLACEBO_VERSION"
+echo "✅ Using libplacebo ABI: $PLACEBO_ABI"
 
 # --- 2. COPY BINARIES ---
 cp -f "$FFMPEG_BIN" "${FRAMEWORKS_DIR}/ffmpeg"
