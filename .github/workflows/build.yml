@@ -151,12 +151,41 @@ jobs:
 
         echo "Bundled runtime dependency check passed."
 
+    - name: Validate bundled FFmpeg libplacebo support
+      run: |
+        FRAMEWORKS_DIR="build/Release/Anime4K Upscaler.app/Contents/Frameworks"
+        BUNDLED_FFMPEG="$FRAMEWORKS_DIR/ffmpeg"
+
+        if [[ ! -x "$BUNDLED_FFMPEG" ]]; then
+          echo "error: bundled ffmpeg is missing or not executable"
+          exit 1
+        fi
+
+        if ! "$BUNDLED_FFMPEG" -hide_banner -filters | grep -qE '[[:space:]]libplacebo[[:space:]]'; then
+          echo "error: bundled ffmpeg does not contain libplacebo filter"
+          exit 1
+        fi
+
+        PLACEBO_SONAME=$(otool -L "$BUNDLED_FFMPEG" | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1)
+        if [[ "$PLACEBO_SONAME" != "351" ]]; then
+          echo "error: bundled ffmpeg is not linked against libplacebo ABI 351 (found: ${PLACEBO_SONAME:-unknown})"
+          exit 1
+        fi
+
+        if [[ ! -f "$FRAMEWORKS_DIR/libplacebo.351.dylib" && ! -f "$FRAMEWORKS_DIR/libplacebo.dylib" ]]; then
+          echo "error: bundled libplacebo dylib (ABI 351) not found in app Frameworks"
+          exit 1
+        fi
+
+        echo "Bundled FFmpeg libplacebo check passed (ABI 351)."
+
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
       with:
         tag_name: ${{ env.RAW_TAG }}
         name: Anime4K Upscaler ${{ env.RAW_TAG }}
         files: ${{ env.DMG_PATH }}
+        overwrite_files: true
         append_body: true
         body: >-
           This release is not Developer ID signed and not notarized. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once.

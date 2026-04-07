@@ -9,6 +9,8 @@ set -euo pipefail
 FRAMEWORKS_DIR="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
 SHADERS_SRC="${SRCROOT}/Anime4K-Upscaler/Resources/Shaders"
+VENDORED_LIB_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredDylibs"
+VENDORED_LIBPLACEBO="${VENDORED_LIB_DIR}/libplacebo.351.dylib"
 
 case "${A4K_SKIP_ADHOC_SIGNING:-0}" in
     1|true|TRUE|yes|YES)
@@ -23,8 +25,18 @@ mkdir -p "${FRAMEWORKS_DIR}"
 mkdir -p "${RESOURCES_DIR}/Shaders"
 
 # --- 1. LOCATE FFMPEG & FFPROBE ---
-FFMPEG_BIN=$(which ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
-FFPROBE_BIN=$(which ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
+BREW_FFMPEG_PREFIX=""
+if command -v brew >/dev/null 2>&1; then
+    BREW_FFMPEG_PREFIX=$(brew --prefix ffmpeg 2>/dev/null || true)
+fi
+
+if [[ -n "$BREW_FFMPEG_PREFIX" && -x "$BREW_FFMPEG_PREFIX/bin/ffmpeg" ]]; then
+    FFMPEG_BIN="$BREW_FFMPEG_PREFIX/bin/ffmpeg"
+    FFPROBE_BIN="$BREW_FFMPEG_PREFIX/bin/ffprobe"
+else
+    FFMPEG_BIN=$(command -v ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
+    FFPROBE_BIN=$(command -v ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
+fi
 
 if [[ ! -f "$FFMPEG_BIN" ]]; then
     echo "error: ffmpeg not found. Install via: brew install ffmpeg"
@@ -38,6 +50,23 @@ fi
 
 echo "📦 Bundling ffmpeg from: $FFMPEG_BIN"
 echo "📦 Bundling ffprobe from: $FFPROBE_BIN"
+
+# Enforce libplacebo-backed ffmpeg. Fail fast if ffmpeg was built without the filter.
+if ! "$FFMPEG_BIN" -hide_banner -filters 2>/dev/null | grep -qE '[[:space:]]libplacebo[[:space:]]'; then
+    echo "error: selected ffmpeg does not include libplacebo filter support"
+    echo "error: selected ffmpeg path: $FFMPEG_BIN"
+    exit 1
+fi
+
+PLACEBO_VERSION=$(
+    pkg-config --modversion libplacebo 2>/dev/null \
+    || otool -L "$FFMPEG_BIN" 2>/dev/null | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1
+)
+if [[ "$PLACEBO_VERSION" != "7.351.0" && "$PLACEBO_VERSION" != "351" ]]; then
+    echo "error: required libplacebo version is 7.351.0 (ABI 351), found: ${PLACEBO_VERSION:-unknown}"
+    exit 1
+fi
+echo "✅ Using libplacebo version: $PLACEBO_VERSION"
 
 # --- 2. COPY BINARIES ---
 cp -f "$FFMPEG_BIN" "${FRAMEWORKS_DIR}/ffmpeg"
@@ -67,8 +96,9 @@ should_skip_dylib() {
     return 1
 }
 
-# Homebrew search paths for resolving @rpath references
-HOMEBREW_LIB_DIRS=(
+# Search paths for resolving @rpath references (prefer vendored dylibs first)
+SEARCH_LIB_DIRS=(
+    "$VENDORED_LIB_DIR"
     "/opt/homebrew/lib"
     "/usr/local/lib"
 )
@@ -76,7 +106,7 @@ HOMEBREW_LIB_DIRS=(
 # Resolve an @rpath reference to an actual file path
 resolve_rpath_dep() {
     local dep_name="$1"
-    for dir in "${HOMEBREW_LIB_DIRS[@]}"; do
+    for dir in "${SEARCH_LIB_DIRS[@]}"; do
         if [[ -f "$dir/$dep_name" ]]; then
             echo "$dir/$dep_name"
             return 0
@@ -142,6 +172,22 @@ relink_moltenvk_refs() {
     done
 }
 
+relink_libplacebo_refs() {
+    local binary="$1"
+    local placebo_refs=(
+        "@rpath/libplacebo.351.dylib"
+        "@rpath/libplacebo.dylib"
+        "/opt/homebrew/lib/libplacebo.351.dylib"
+        "/opt/homebrew/opt/libplacebo/lib/libplacebo.351.dylib"
+        "/usr/local/lib/libplacebo.351.dylib"
+    )
+
+    local ref
+    for ref in "${placebo_refs[@]}"; do
+        install_name_tool -change "$ref" "@executable_path/../Frameworks/libplacebo.351.dylib" "$binary" 2>/dev/null || true
+    done
+}
+
 copy_dylibs_recursive() {
     local binary="$1"
     local depth="${2:-0}"
@@ -202,6 +248,16 @@ copy_dylibs_recursive "${FRAMEWORKS_DIR}/ffmpeg"
 
 echo "🔗 Resolving dylib dependencies for ffprobe..."
 copy_dylibs_recursive "${FRAMEWORKS_DIR}/ffprobe"
+
+if [[ -f "$VENDORED_LIBPLACEBO" ]]; then
+    echo "📦 Using vendored libplacebo from: $VENDORED_LIBPLACEBO"
+    cp -f "$VENDORED_LIBPLACEBO" "${FRAMEWORKS_DIR}/libplacebo.351.dylib"
+    chmod 644 "${FRAMEWORKS_DIR}/libplacebo.351.dylib"
+    install_name_tool -id "@executable_path/../Frameworks/libplacebo.351.dylib" "${FRAMEWORKS_DIR}/libplacebo.351.dylib" 2>/dev/null || true
+fi
+
+relink_libplacebo_refs "${FRAMEWORKS_DIR}/ffmpeg"
+relink_libplacebo_refs "${FRAMEWORKS_DIR}/ffprobe"
 
 # --- 4. REWRITE ALL DYLIBS' INTERNAL REFERENCES (multi-pass) ---
 # Some dylibs reference others via @rpath which step 3 may not have
@@ -275,11 +331,13 @@ if [[ -n "$MOLTENVK_PATH" && -f "$MOLTENVK_PATH" ]]; then
 
     relink_moltenvk_refs "${FRAMEWORKS_DIR}/ffmpeg"
     relink_moltenvk_refs "${FRAMEWORKS_DIR}/ffprobe"
-    for dylib in "${FRAMEWORKS_DIR}"/*.dylib; do
-        [[ ! -f "$dylib" ]] && continue
-        relink_moltenvk_refs "$dylib"
-    done
 fi
+
+for dylib in "${FRAMEWORKS_DIR}"/*.dylib; do
+    [[ ! -f "$dylib" ]] && continue
+    relink_libplacebo_refs "$dylib"
+    relink_moltenvk_refs "$dylib"
+done
 
 if [[ "$MOLTENVK_FOUND" == "false" ]]; then
     echo "warning: libMoltenVK.dylib not found. Vulkan-based libplacebo shaders may not work."
