@@ -352,6 +352,8 @@ final class ProcessingEngine {
                 let inputFrameBytes = inputWidth * inputHeight * 4
                 let outputFrameBytes = max(1, outputWidth * outputHeight * 4)
                 let wallStart = Date()
+                var metricsStart = wallStart
+                var metricsStarted = false
                 var lastUIUpdate = wallStart
 
                 let workerCount = max(1, processors.count)
@@ -508,23 +510,35 @@ final class ProcessingEngine {
 
                                 encodedFrameCount += 1
                                 nextWriteIndex += 1
-
                                 let now = Date()
+
+                                if !metricsStarted {
+                                    metricsStarted = true
+                                    metricsStart = now
+                                }
+
                                 if now.timeIntervalSince(lastUIUpdate) >= throttleSeconds {
-                                    let elapsed = max(now.timeIntervalSince(wallStart), 0.001)
+                                    let elapsed = max(now.timeIntervalSince(metricsStart), 0.001)
                                     let processedSeconds = Double(encodedFrameCount) / fps
                                     let progress = totalDuration > 0 ? min(processedSeconds / totalDuration, 1.0) : 0.0
-                                    let speed = processedSeconds / elapsed
                                     let realtimeFPS = Double(encodedFrameCount) / elapsed
+                                    let speed = realtimeFPS / fps
                                     let ffmpegTime = Self.formatFFmpegTime(seconds: processedSeconds)
+                                    let frameCount = encodedFrameCount
+                                    let shouldShowStableSpeed = frameCount >= 6 && elapsed >= 0.35
                                     lastUIUpdate = now
 
                                     Task { @MainActor in
-                                        job.currentFrame = encodedFrameCount
+                                        job.currentFrame = frameCount
                                         job.currentTime = ffmpegTime
                                         job.progress = progress
-                                        job.speed = String(format: "%.2fx", speed)
                                         job.fps = String(format: "%.1f", realtimeFPS)
+
+                                        if shouldShowStableSpeed {
+                                            job.speed = String(format: "x%.3f", speed)
+                                        } else {
+                                            job.speed = "warming..."
+                                        }
                                     }
                                 }
                             }
@@ -750,7 +764,11 @@ final class ProcessingEngine {
             return .videoToolbox
         }
 
+        #if arch(arm64)
+        return .videoToolbox
+        #else
         return .ffmpeg
+        #endif
     }
 
     private static func buildDecodeArguments(inputURL: URL) -> [String] {

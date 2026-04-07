@@ -11,7 +11,34 @@ import Observation
 @MainActor @Observable
 final class AppViewModel {
 
+    enum MainTab: String, CaseIterable {
+        case upscale
+        case compress
+        case streamOptimize
+        case qualityTune
+    }
+
+    struct QualityScanCandidate: Identifiable, Sendable {
+        let id = UUID()
+        let value: Int
+        let usesCRF: Bool
+        let ssim: Double
+        let psnr: Double
+        let outputSizeBytes: Int64
+
+        var valueLabel: String {
+            usesCRF ? "CRF \(value)" : "Q \(value)"
+        }
+
+        var sizeLabel: String {
+            ByteCountFormatter.string(fromByteCount: outputSizeBytes, countStyle: .file)
+        }
+    }
+
     // MARK: - State
+
+    /// Selected top-level tab in the root TabView.
+    var selectedMainTab: MainTab = .upscale
 
     /// All imported video files.
     var files: [VideoFile] = []
@@ -49,6 +76,25 @@ final class AppViewModel {
     /// Display name for the selected output directory.
     var outputDirectoryDisplayName: String {
         outputDirectoryURL?.lastPathComponent ?? "Not selected"
+    }
+
+    // MARK: - Quality Tune State
+
+    var qualityTuneInputURL: URL?
+    var qualityTuneCodec: VideoCodec = .hevcVideoToolbox
+    var qualityTuneRangeStart: Int = 56
+    var qualityTuneRangeEnd: Int = 80
+    var qualityTuneStep: Int = 4
+    var qualityTuneSampleSeconds: Int = 20
+    var qualityTuneTargetSSIM: Double = 0.995
+    var qualityTuneIsRunning: Bool = false
+    var qualityTuneCandidates: [QualityScanCandidate] = []
+    var qualityTuneBestCandidate: QualityScanCandidate?
+    var qualityTuneStatusText: String = ""
+    var qualityTuneErrorText: String?
+
+    var qualityTuneValueLabel: String {
+        qualityTuneCodec.usesCRF ? "CRF" : "Q"
     }
 
     // MARK: - Engine
@@ -234,6 +280,153 @@ final class AppViewModel {
         }
     }
 
+    func selectQualityTuneInputFile() {
+        let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: false)
+        guard let url = urls.first else { return }
+        SecurityScopeManager.shared.startAccessing(url)
+        qualityTuneInputURL = url
+    }
+
+    func onQualityTuneCodecChanged() {
+        if qualityTuneCodec.usesCRF {
+            qualityTuneRangeStart = 20
+            qualityTuneRangeEnd = 36
+            qualityTuneStep = 2
+        } else {
+            qualityTuneRangeStart = 56
+            qualityTuneRangeEnd = 80
+            qualityTuneStep = 4
+        }
+    }
+
+    func runQualityTuneScan() {
+        guard !qualityTuneIsRunning else { return }
+        guard let inputURL = qualityTuneInputURL else {
+            qualityTuneErrorText = "Choose an input video first."
+            return
+        }
+        guard let ffmpegURL = FFmpegLocator.ffmpegURL,
+              FileManager.default.isExecutableFile(atPath: ffmpegURL.path) else {
+            qualityTuneErrorText = "Bundled ffmpeg was not found."
+            return
+        }
+
+        let codec = qualityTuneCodec
+        let start = max(0, qualityTuneRangeStart)
+        let end = max(start, qualityTuneRangeEnd)
+        let step = max(1, qualityTuneStep)
+        let sampleSeconds = max(5, qualityTuneSampleSeconds)
+        let targetSSIM = min(max(qualityTuneTargetSSIM, 0.8), 1.0)
+
+        qualityTuneIsRunning = true
+        qualityTuneCandidates = []
+        qualityTuneBestCandidate = nil
+        qualityTuneErrorText = nil
+        qualityTuneStatusText = "Running quality scan..."
+
+        Task.detached(priority: .userInitiated) {
+            let environment = FFmpegLocator.processEnvironment()
+            let tempRoot = FileManager.default.temporaryDirectory
+                .appendingPathComponent("a4k_quality_scan_\(UUID().uuidString)", isDirectory: true)
+
+            do {
+                try FileManager.default.createDirectory(at: tempRoot, withIntermediateDirectories: true)
+
+                var candidates: [QualityScanCandidate] = []
+
+                for value in stride(from: start, through: end, by: step) {
+                    let outURL = tempRoot.appendingPathComponent("sample_\(value).mp4")
+
+                    let encodeArgs = Self.buildQualityTuneEncodeArgs(
+                        inputURL: inputURL,
+                        outputURL: outURL,
+                        codec: codec,
+                        value: value,
+                        sampleSeconds: sampleSeconds
+                    )
+
+                    let encodeOutput = try Self.runTool(
+                        executableURL: ffmpegURL,
+                        arguments: encodeArgs,
+                        environment: environment
+                    )
+
+                    guard encodeOutput.status == 0 else {
+                        throw NSError(
+                            domain: "Anime4K.QualityTune",
+                            code: 1,
+                            userInfo: [NSLocalizedDescriptionKey: "Encoding failed for \(codec.usesCRF ? "CRF" : "Q") \(value): \(encodeOutput.output)"]
+                        )
+                    }
+
+                    let fileSize = (try? outURL.resourceValues(forKeys: [.fileSizeKey]).fileSize).map(Int64.init) ?? 0
+
+                    let ssimArgs = Self.buildQualityMetricArgs(
+                        metric: "ssim",
+                        inputURL: inputURL,
+                        encodedURL: outURL,
+                        sampleSeconds: sampleSeconds
+                    )
+                    let ssimOutput = try Self.runTool(
+                        executableURL: ffmpegURL,
+                        arguments: ssimArgs,
+                        environment: environment
+                    )
+                    let ssim = Self.parseSSIM(ssimOutput.output) ?? 0.0
+
+                    let psnrArgs = Self.buildQualityMetricArgs(
+                        metric: "psnr",
+                        inputURL: inputURL,
+                        encodedURL: outURL,
+                        sampleSeconds: sampleSeconds
+                    )
+                    let psnrOutput = try Self.runTool(
+                        executableURL: ffmpegURL,
+                        arguments: psnrArgs,
+                        environment: environment
+                    )
+                    let psnr = Self.parsePSNR(psnrOutput.output) ?? 0.0
+
+                    candidates.append(
+                        QualityScanCandidate(
+                            value: value,
+                            usesCRF: codec.usesCRF,
+                            ssim: ssim,
+                            psnr: psnr,
+                            outputSizeBytes: fileSize
+                        )
+                    )
+
+                    await MainActor.run {
+                        self.qualityTuneCandidates = candidates
+                        self.qualityTuneStatusText = "Evaluated \(candidates.count) candidate\(candidates.count == 1 ? "" : "s")..."
+                    }
+                }
+
+                let best = Self.pickBestQualityCandidate(candidates: candidates, targetSSIM: targetSSIM)
+
+                await MainActor.run {
+                    self.qualityTuneCandidates = candidates
+                    self.qualityTuneBestCandidate = best
+                    if let best {
+                        self.qualityTuneStatusText = "Best \(best.valueLabel): SSIM \(String(format: "%.4f", best.ssim)), PSNR \(String(format: "%.2f", best.psnr)) dB, \(best.sizeLabel)"
+                    } else {
+                        self.qualityTuneStatusText = "No valid candidate found."
+                    }
+                    self.qualityTuneIsRunning = false
+                }
+            } catch {
+                await MainActor.run {
+                    self.qualityTuneErrorText = error.localizedDescription
+                    self.qualityTuneIsRunning = false
+                    self.qualityTuneStatusText = "Scan failed."
+                }
+            }
+
+            try? FileManager.default.removeItem(at: tempRoot)
+        }
+    }
+
     // MARK: - Processing
 
     /// Whether processing can be started.
@@ -322,5 +515,129 @@ final class AppViewModel {
     /// Whether all jobs have finished (completed, failed, or cancelled).
     var allJobsFinished: Bool {
         !jobs.isEmpty && jobs.allSatisfy { $0.state.isTerminal }
+    }
+
+    // MARK: - Quality Tune Helpers
+
+    nonisolated private static func buildQualityTuneEncodeArgs(
+        inputURL: URL,
+        outputURL: URL,
+        codec: VideoCodec,
+        value: Int,
+        sampleSeconds: Int
+    ) -> [String] {
+        var args: [String] = [
+            "-hide_banner", "-v", "error", "-stats",
+            "-y",
+            "-t", "\(sampleSeconds)",
+            "-i", inputURL.path,
+            "-map", "0:v:0",
+            "-an",
+            "-sn",
+            "-c:v", codec.encoderName
+        ]
+
+        switch codec {
+        case .hevcVideoToolbox:
+            args.append(contentsOf: [
+                "-profile:v", "main10",
+                "-pix_fmt", "yuv420p10le",
+                "-allow_sw", "1",
+                "-q:v", "\(value)"
+            ])
+        case .svtAV1:
+            args.append(contentsOf: [
+                "-pix_fmt", "yuv420p10le",
+                "-preset", "6",
+                "-crf", "\(value)"
+            ])
+        }
+
+        args.append(outputURL.path)
+        return args
+    }
+
+    nonisolated private static func buildQualityMetricArgs(
+        metric: String,
+        inputURL: URL,
+        encodedURL: URL,
+        sampleSeconds: Int
+    ) -> [String] {
+        [
+            "-hide_banner", "-nostats",
+            "-t", "\(sampleSeconds)",
+            "-i", inputURL.path,
+            "-t", "\(sampleSeconds)",
+            "-i", encodedURL.path,
+            "-lavfi", "\(metric)=shortest=1",
+            "-f", "null", "-"
+        ]
+    }
+
+    nonisolated private static func parseSSIM(_ output: String) -> Double? {
+        if let range = output.range(of: "All:", options: .caseInsensitive) {
+            let suffix = output[range.upperBound...]
+            let number = suffix.prefix { $0.isNumber || $0 == "." }
+            return Double(number)
+        }
+        return nil
+    }
+
+    nonisolated private static func parsePSNR(_ output: String) -> Double? {
+        if let range = output.range(of: "average:", options: .caseInsensitive) {
+            let suffix = output[range.upperBound...]
+            let number = suffix.prefix { $0.isNumber || $0 == "." }
+            return Double(number)
+        }
+        return nil
+    }
+
+    nonisolated private static func pickBestQualityCandidate(
+        candidates: [QualityScanCandidate],
+        targetSSIM: Double
+    ) -> QualityScanCandidate? {
+        let pass = candidates.filter { $0.ssim >= targetSSIM }
+        if let bestPassing = pass.min(by: {
+            if $0.outputSizeBytes != $1.outputSizeBytes {
+                return $0.outputSizeBytes < $1.outputSizeBytes
+            }
+            if $0.psnr != $1.psnr {
+                return $0.psnr > $1.psnr
+            }
+            return $0.ssim > $1.ssim
+        }) {
+            return bestPassing
+        }
+
+        return candidates.max(by: {
+            if $0.ssim != $1.ssim {
+                return $0.ssim < $1.ssim
+            }
+            if $0.psnr != $1.psnr {
+                return $0.psnr < $1.psnr
+            }
+            return $0.outputSizeBytes > $1.outputSizeBytes
+        })
+    }
+
+    nonisolated private static func runTool(
+        executableURL: URL,
+        arguments: [String],
+        environment: [String: String]
+    ) throws -> (status: Int32, output: String) {
+        let process = Process()
+        process.executableURL = executableURL
+        process.arguments = arguments
+        process.environment = environment
+
+        let pipe = Pipe()
+        process.standardError = pipe
+        process.standardOutput = pipe
+
+        try process.run()
+        process.waitUntilExit()
+
+        let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+        return (process.terminationStatus, output)
     }
 }

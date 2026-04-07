@@ -22,7 +22,7 @@ struct ModePicker: View {
                         Image(systemName: category.symbolName)
                             .font(.caption)
                             .foregroundStyle(.secondary)
-                        Text(category.rawValue)
+                        Text(category.displayName)
                             .font(.caption)
                             .fontWeight(.semibold)
                             .foregroundStyle(.secondary)

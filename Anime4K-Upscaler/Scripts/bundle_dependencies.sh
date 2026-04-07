@@ -110,6 +110,58 @@ resolve_rpath_dep() {
     return 1
 }
 
+find_moltenvk_path() {
+    local candidate
+
+    # Prefer Homebrew-reported prefix when available.
+    if command -v brew >/dev/null 2>&1; then
+        local brew_prefix
+        brew_prefix=$(brew --prefix molten-vk 2>/dev/null || true)
+        if [[ -n "$brew_prefix" && -f "$brew_prefix/lib/libMoltenVK.dylib" ]]; then
+            echo "$brew_prefix/lib/libMoltenVK.dylib"
+            return 0
+        fi
+    fi
+
+    local moltenvk_paths=(
+        "/opt/homebrew/lib/libMoltenVK.dylib"
+        "/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib"
+        "/usr/local/lib/libMoltenVK.dylib"
+    )
+
+    for candidate in "${moltenvk_paths[@]}"; do
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    # Last-resort search across Homebrew cellars.
+    for candidate in /opt/homebrew/Cellar/molten-vk/*/lib/libMoltenVK.dylib /usr/local/Cellar/molten-vk/*/lib/libMoltenVK.dylib; do
+        if [[ -f "$candidate" ]]; then
+            echo "$candidate"
+            return 0
+        fi
+    done
+
+    return 1
+}
+
+relink_moltenvk_refs() {
+    local binary="$1"
+    local moltenvk_refs=(
+        "@rpath/libMoltenVK.dylib"
+        "/opt/homebrew/lib/libMoltenVK.dylib"
+        "/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib"
+        "/usr/local/lib/libMoltenVK.dylib"
+    )
+
+    local ref
+    for ref in "${moltenvk_refs[@]}"; do
+        install_name_tool -change "$ref" "@executable_path/../Frameworks/libMoltenVK.dylib" "$binary" 2>/dev/null || true
+    done
+}
+
 copy_dylibs_recursive() {
     local binary="$1"
     local depth="${2:-0}"
@@ -231,23 +283,24 @@ while true; do
 done
 
 # --- 5. COPY MOLTENVK ---
-MOLTENVK_PATHS=(
-    "/opt/homebrew/lib/libMoltenVK.dylib"
-    "/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib"
-    "/usr/local/lib/libMoltenVK.dylib"
-)
-
 MOLTENVK_FOUND=false
-for mvk_path in "${MOLTENVK_PATHS[@]}"; do
-    if [[ -f "$mvk_path" ]]; then
-        echo "📦 Bundling MoltenVK from: $mvk_path"
-        cp -f "$mvk_path" "${FRAMEWORKS_DIR}/libMoltenVK.dylib"
-        chmod 644 "${FRAMEWORKS_DIR}/libMoltenVK.dylib"
-        install_name_tool -id "@executable_path/../Frameworks/libMoltenVK.dylib" "${FRAMEWORKS_DIR}/libMoltenVK.dylib" 2>/dev/null || true
-        MOLTENVK_FOUND=true
-        break
-    fi
-done
+MOLTENVK_PATH=$(find_moltenvk_path 2>/dev/null || true)
+
+if [[ -n "$MOLTENVK_PATH" && -f "$MOLTENVK_PATH" ]]; then
+    echo "📦 Bundling MoltenVK from: $MOLTENVK_PATH"
+    cp -f "$MOLTENVK_PATH" "${FRAMEWORKS_DIR}/libMoltenVK.dylib"
+    chmod 644 "${FRAMEWORKS_DIR}/libMoltenVK.dylib"
+    install_name_tool -id "@executable_path/../Frameworks/libMoltenVK.dylib" "${FRAMEWORKS_DIR}/libMoltenVK.dylib" 2>/dev/null || true
+    MOLTENVK_FOUND=true
+
+    # Ensure all binaries prefer bundled MoltenVK over host paths.
+    relink_moltenvk_refs "${FRAMEWORKS_DIR}/ffmpeg"
+    relink_moltenvk_refs "${FRAMEWORKS_DIR}/ffprobe"
+    for dylib in "${FRAMEWORKS_DIR}"/*.dylib; do
+        [[ ! -f "$dylib" ]] && continue
+        relink_moltenvk_refs "$dylib"
+    done
+fi
 
 if [[ "$MOLTENVK_FOUND" == "false" ]]; then
     echo "warning: libMoltenVK.dylib not found. Vulkan-based libplacebo shaders may not work."
