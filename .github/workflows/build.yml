@@ -186,3 +186,87 @@ jobs:
           This release is not Developer ID signed and not notarized. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once.
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  build-windows:
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        arch: [x64, arm64]
+        include:
+          - arch: x64
+            qt_arch: win64_msvc2019_64
+            cmake_arch: -A x64
+          - arch: arm64
+            qt_arch: win64_msvc2019_arm64
+            cmake_arch: -A ARM64
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Download FFmpeg & FFprobe dependencies
+      run: python windows/download_dependencies.py
+
+    - name: Install Qt
+      uses: jurplel/install-qt-action@v3
+      with:
+        version: '6.5.3'
+        arch: ${{ matrix.qt_arch }}
+        host: 'windows'
+        target: 'desktop'
+
+    - name: Resolve release tag and version
+      id: get_version
+      shell: bash
+      run: |
+        TAG_FROM_RELEASE="${{ github.event.release.tag_name || '' }}"
+        TAG_FROM_REF="${{ github.ref_name }}"
+        if [[ -n "$TAG_FROM_RELEASE" ]]; then
+          RAW_TAG="$TAG_FROM_RELEASE"
+        else
+          RAW_TAG="$TAG_FROM_REF"
+        fi
+        echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
+        echo "VERSION=${RAW_TAG#v}" >> "$GITHUB_ENV"
+
+    - name: Configure CMake
+      run: cmake -B build-${{ matrix.arch }} -S windows ${{ matrix.cmake_arch }} -DCMAKE_BUILD_TYPE=Release
+
+    - name: Build
+      run: cmake --build build-${{ matrix.arch }} --config Release
+
+    - name: Package Release
+      shell: pwsh
+      run: |
+        # Create staging folders
+        New-Item -ItemType Directory -Path build-${{ matrix.arch }}\Release\dist -Force
+        New-Item -ItemType Directory -Path build-${{ matrix.arch }}\Release\dist\vendor\${{ matrix.arch }} -Force
+        
+        # Copy binary
+        Copy-Item build-${{ matrix.arch }}\Release\Anime4KUpscaler.exe build-${{ matrix.arch }}\Release\dist\
+        
+        # Deploy Qt runtimes
+        windeployqt --no-compiler-runtime --dir build-${{ matrix.arch }}\Release\dist build-${{ matrix.arch }}\Release\Anime4KUpscaler.exe
+        
+        # Deploy shaders
+        Copy-Item -Path shaders -Destination build-${{ matrix.arch }}\Release\dist\shaders -Recurse -Force
+        
+        # Deploy FFmpeg dependencies
+        Copy-Item -Path windows\vendor\${{ matrix.arch }}\ffmpeg.exe -Destination build-${{ matrix.arch }}\Release\dist\vendor\${{ matrix.arch }}\
+        Copy-Item -Path windows\vendor\${{ matrix.arch }}\ffprobe.exe -Destination build-${{ matrix.arch }}\Release\dist\vendor\${{ matrix.arch }}\
+        
+        # Create Zip Archive
+        New-Item -ItemType Directory -Path build\pkg -Force
+        Compress-Archive -Path build-${{ matrix.arch }}\Release\dist\* -DestinationPath build\pkg\Anime4K_Upscaler_${{ env.RAW_TAG }}_win_${{ matrix.arch }}.zip -Force
+
+    - name: Upload Release Asset
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name: ${{ env.RAW_TAG }}
+        files: build/pkg/Anime4K_Upscaler_${{ env.RAW_TAG }}_win_${{ matrix.arch }}.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

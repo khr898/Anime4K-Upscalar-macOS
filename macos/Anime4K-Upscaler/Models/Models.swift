@@ -94,8 +94,40 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
     case modeAA_Fast_NoUp = 13
     case modeA_HQ_NoUp    = 14
     case modeAA_HQ_NoUp   = 15
+    // Neural SR Modes (16-18)
+    case esrgan_Fast    = 16
+    case esrgan_Quality = 17
+    case esrgan_General = 18
+    // Special ANE Modes (19-22)
+    case special_Fast    = 19
+    case special_Quality = 20
+    case special_SDRescue = 21
+    case special_PiperSR_2x = 22
 
     var id: Int { rawValue }
+
+    var isNeuralSR: Bool {
+        self == .esrgan_Fast || self == .esrgan_Quality || self == .esrgan_General
+    }
+
+    var isSpecial: Bool {
+        self == .special_Fast || self == .special_Quality || self == .special_SDRescue || self == .special_PiperSR_2x
+    }
+
+    var modelName: String? {
+        switch self {
+        case .esrgan_Fast, .special_Fast, .special_SDRescue:
+            return "realesr-animevideov3"
+        case .esrgan_Quality, .special_Quality:
+            return "realesrgan-x4plus-anime"
+        case .esrgan_General:
+            return "realesrgan-x4plus"
+        case .special_PiperSR_2x:
+            return "pipersr"
+        default:
+            return nil
+        }
+    }
 
     /// Human-readable display name.
     var displayName: String {
@@ -115,6 +147,13 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
         case .modeAA_Fast_NoUp: return "Mode A+A (Fast) [No Upscale]"
         case .modeA_HQ_NoUp:    return "Mode A (HQ) [No Upscale]"
         case .modeAA_HQ_NoUp:   return "Mode A+A (HQ) [No Upscale]"
+        case .esrgan_Fast:      return "ESRGAN Fast"
+        case .esrgan_Quality:   return "ESRGAN Quality"
+        case .esrgan_General:   return "ESRGAN General"
+        case .special_Fast:     return "SPECIAL: Fast"
+        case .special_Quality:  return "SPECIAL: Quality"
+        case .special_SDRescue: return "SPECIAL: SD Rescue"
+        case .special_PiperSR_2x: return "SPECIAL: PiperSR 2x"
         }
     }
 
@@ -136,6 +175,13 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
         case .modeAA_Fast_NoUp: return "Restore Only (Fast)"
         case .modeA_HQ_NoUp:    return "Restore Only (HQ)"
         case .modeAA_HQ_NoUp:   return "Double Restore Only (HQ)"
+        case .esrgan_Fast:      return "Anime compact model (realesr-animevideov3)"
+        case .esrgan_Quality:   return "High quality anime model (realesrgan-x4plus-anime)"
+        case .esrgan_General:   return "General / live-action model (realesrgan-x4plus)"
+        case .special_Fast:     return "Core ML realesr-animevideov3 on Neural Engine"
+        case .special_Quality:  return "Core ML realesrgan-x4plus-anime on Neural Engine"
+        case .special_SDRescue: return "Anime4K Restore VL → Core ML realesr-animevideov3"
+        case .special_PiperSR_2x: return "Core ML PiperSR 2x ANE-native upscaler"
         }
     }
 
@@ -148,6 +194,10 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
             return .fast
         case .modeAA_Fast_NoUp, .modeA_HQ_NoUp, .modeAA_HQ_NoUp:
             return .noUpscale
+        case .esrgan_Fast, .esrgan_Quality, .esrgan_General:
+            return .neuralSR
+        case .special_Fast, .special_Quality, .special_SDRescue, .special_PiperSR_2x:
+            return .special
         }
     }
 
@@ -159,6 +209,7 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
     /// The ordered shader pipeline for this mode.
     /// Directly mapped from the reference shell script.
     var shaders: [Anime4KShader] {
+        if isNeuralSR || isSpecial { return [] }
         switch self {
         case .modeA_HQ:
             return [
@@ -271,6 +322,8 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
 
 /// Grouping for sectioned picker display.
 enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
+    case special   = "⚡ Special (Recommended for M3 Pro)"
+    case neuralSR  = "Neural SR"
     case hq        = "HQ Modes"
     case fast      = "Fast Modes"
     case noUpscale = "No Upscale Modes (Restore Only)"
@@ -281,7 +334,7 @@ enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .hq:
             return DeviceHardwareProfile.current.hqModeHeader
-        case .fast, .noUpscale:
+        case .fast, .noUpscale, .neuralSR, .special:
             return rawValue
         }
     }
@@ -292,6 +345,8 @@ enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
         case .hq:        return "star.fill"
         case .fast:      return "hare.fill"
         case .noUpscale: return "arrow.uturn.backward"
+        case .neuralSR:  return "wand.and.stars"
+        case .special:   return "bolt.fill"
         }
     }
 

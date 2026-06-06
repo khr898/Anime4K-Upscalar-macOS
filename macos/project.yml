@@ -28,6 +28,10 @@ targets:
         excludes:
           - Scripts/**
           - "*.entitlements"
+      - path: ../shaders
+        name: Shaders
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.anime4k.upscaler
