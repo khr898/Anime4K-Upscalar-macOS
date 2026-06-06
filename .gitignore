@@ -18,3 +18,12 @@ DerivedData/
 # Vim swap files
 *.swp
 *.swo
+
+# Visual Studio / Windows
+.vs/
+[Dd]ebug/
+[Rr]elease/
+*.user
+*.suo
+*.db
+*.opendb
