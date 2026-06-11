@@ -31,6 +31,8 @@ private slots:
     void onBitrateSliderChanged(int value);
     void onBitrateSpinChanged(int value);
     void onLongGOPChanged(int state);
+    void onSvtPresetSliderChanged(int value);
+    void onSvtPresetSpinChanged(int value);
 
 private:
     void initUI();
@@ -58,6 +60,12 @@ private:
     QWidget* m_bitrateContainer;
     QSlider* m_bitrateSlider;
     QSpinBox* m_bitrateSpin;
+
+    // SVT-AV1 preset slider/spinbox
+    QWidget* m_svtPresetContainer;
+    QSlider* m_svtPresetSlider;
+    QSpinBox* m_svtPresetSpin;
+    QLabel* m_svtPresetDescLabel;
 
     QCheckBox* m_longGOPCheck;
 

@@ -27,3 +27,6 @@ DerivedData/
 *.suo
 *.db
 *.opendb
+windows/build-x64/
+build-x64/
+

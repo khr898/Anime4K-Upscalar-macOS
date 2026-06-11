@@ -188,6 +188,7 @@ struct JobConfiguration {
     VideoCodec codec;
     CompressionMode compression;
     bool longGOPEnabled;
+    int svtAV1Preset = 6;
 
     static JobConfiguration defaultConfig();
 
@@ -196,7 +197,8 @@ struct JobConfiguration {
                resolution == other.resolution &&
                codec == other.codec &&
                compression == other.compression &&
-               longGOPEnabled == other.longGOPEnabled;
+               longGOPEnabled == other.longGOPEnabled &&
+               svtAV1Preset == other.svtAV1Preset;
     }
 };
 

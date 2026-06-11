@@ -1,4 +1,0 @@
-Z:/Anime4K-Upscalar-macOS/windows/build-x64/CMakeFiles/Anime4KUpscaler.dir
-Z:/Anime4K-Upscalar-macOS/windows/build-x64/CMakeFiles/INSTALL.dir
-Z:/Anime4K-Upscalar-macOS/windows/build-x64/CMakeFiles/ALL_BUILD.dir
-Z:/Anime4K-Upscalar-macOS/windows/build-x64/CMakeFiles/ZERO_CHECK.dir

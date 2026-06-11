@@ -147,6 +147,34 @@ void ConfigurationPanel::initUI() {
     bitLayout->addWidget(m_bitrateSpin);
     cardLayout->addWidget(m_bitrateContainer);
 
+    // 5b. SVT-AV1 Speed Preset Slider
+    m_svtPresetContainer = new QWidget(card);
+    auto* svtVLayout = new QVBoxLayout(m_svtPresetContainer);
+    svtVLayout->setContentsMargins(0, 0, 0, 0);
+    svtVLayout->setSpacing(4);
+
+    auto* svtHLayout = new QHBoxLayout();
+    svtHLayout->setContentsMargins(0, 0, 0, 0);
+    auto* svtLabel = new QLabel("AV1 Speed Preset:", m_svtPresetContainer);
+    svtLabel->setStyleSheet("font-weight: bold; color: #515154;");
+    svtLabel->setMinimumWidth(100);
+    m_svtPresetSlider = new QSlider(Qt::Horizontal, m_svtPresetContainer);
+    m_svtPresetSlider->setRange(0, 13);
+    m_svtPresetSpin = new QSpinBox(m_svtPresetContainer);
+    m_svtPresetSpin->setRange(0, 13);
+    m_svtPresetSpin->setFixedWidth(60);
+
+    svtHLayout->addWidget(svtLabel);
+    svtHLayout->addWidget(m_svtPresetSlider);
+    svtHLayout->addWidget(m_svtPresetSpin);
+    svtVLayout->addLayout(svtHLayout);
+
+    m_svtPresetDescLabel = new QLabel(m_svtPresetContainer);
+    m_svtPresetDescLabel->setStyleSheet("color: #8e8e93; font-size: 11px;");
+    svtVLayout->addWidget(m_svtPresetDescLabel);
+
+    cardLayout->addWidget(m_svtPresetContainer);
+
     // 6. Long GOP Checkbox
     m_longGOPCheck = new QCheckBox("Optimize compression (Long GOP / Keyframe 10s)", card);
     m_longGOPCheck->setStyleSheet("color: #1d1d1f;");
@@ -177,6 +205,8 @@ void ConfigurationPanel::initUI() {
     connect(m_bitrateSlider, &QSlider::valueChanged, this, &ConfigurationPanel::onBitrateSliderChanged);
     connect(m_bitrateSpin, &QSpinBox::valueChanged, this, &ConfigurationPanel::onBitrateSpinChanged);
     connect(m_longGOPCheck, &QCheckBox::stateChanged, this, &ConfigurationPanel::onLongGOPChanged);
+    connect(m_svtPresetSlider, &QSlider::valueChanged, this, &ConfigurationPanel::onSvtPresetSliderChanged);
+    connect(m_svtPresetSpin, &QSpinBox::valueChanged, this, &ConfigurationPanel::onSvtPresetSpinChanged);
     connect(m_outputDirBrowseBtn, &QPushButton::clicked, m_viewModel, &AppViewModel::selectOutputDirectory);
 }
 
@@ -212,6 +242,21 @@ void ConfigurationPanel::updateFromViewModel() {
 
     m_bitrateSlider->setValue(m_viewModel->customBitrateValue());
     m_bitrateSpin->setValue(m_viewModel->customBitrateValue());
+
+    // Update SVT-AV1 preset UI
+    bool isAV1 = (config.codec == VideoCodec::SVT_AV1);
+    m_svtPresetContainer->setVisible(isAV1);
+    m_svtPresetSlider->setValue(config.svtAV1Preset);
+    m_svtPresetSpin->setValue(config.svtAV1Preset);
+    
+    // Update SVT-AV1 preset description text
+    QString desc;
+    int p = config.svtAV1Preset;
+    if (p >= 0 && p <= 3) desc = "Archival (Slowest, Maximum Compression)";
+    else if (p >= 4 && p <= 6) desc = "Standard (Balanced Speed & Quality - Recommended)";
+    else if (p >= 7 && p <= 10) desc = "Fast (High Speed, Moderate Compression)";
+    else if (p >= 11 && p <= 13) desc = "Real-time (Ultra Fast, Lower Compression)";
+    m_svtPresetDescLabel->setText(desc);
 
     m_longGOPCheck->setChecked(config.longGOPEnabled);
     m_outputDirEdit->setText(m_viewModel->outputDirectoryDisplayName());
@@ -258,5 +303,37 @@ void ConfigurationPanel::onBitrateSpinChanged(int value) {
 
 void ConfigurationPanel::onLongGOPChanged(int state) {
     m_viewModel->configurationRef().longGOPEnabled = (state == Qt::Checked);
+    emit m_viewModel->configurationChanged();
+}
+
+void ConfigurationPanel::onSvtPresetSliderChanged(int value) {
+    m_viewModel->configurationRef().svtAV1Preset = value;
+    m_svtPresetSpin->blockSignals(true);
+    m_svtPresetSpin->setValue(value);
+    m_svtPresetSpin->blockSignals(false);
+    
+    QString desc;
+    if (value >= 0 && value <= 3) desc = "Archival (Slowest, Maximum Compression)";
+    else if (value >= 4 && value <= 6) desc = "Standard (Balanced Speed & Quality - Recommended)";
+    else if (value >= 7 && value <= 10) desc = "Fast (High Speed, Moderate Compression)";
+    else if (value >= 11 && value <= 13) desc = "Real-time (Ultra Fast, Lower Compression)";
+    m_svtPresetDescLabel->setText(desc);
+
+    emit m_viewModel->configurationChanged();
+}
+
+void ConfigurationPanel::onSvtPresetSpinChanged(int value) {
+    m_viewModel->configurationRef().svtAV1Preset = value;
+    m_svtPresetSlider->blockSignals(true);
+    m_svtPresetSlider->setValue(value);
+    m_svtPresetSlider->blockSignals(false);
+
+    QString desc;
+    if (value >= 0 && value <= 3) desc = "Archival (Slowest, Maximum Compression)";
+    else if (value >= 4 && value <= 6) desc = "Standard (Balanced Speed & Quality - Recommended)";
+    else if (value >= 7 && value <= 10) desc = "Fast (High Speed, Moderate Compression)";
+    else if (value >= 11 && value <= 13) desc = "Real-time (Ultra Fast, Lower Compression)";
+    m_svtPresetDescLabel->setText(desc);
+
     emit m_viewModel->configurationChanged();
 }

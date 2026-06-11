@@ -27,6 +27,41 @@ esac
 mkdir -p "${FRAMEWORKS_DIR}"
 mkdir -p "${RESOURCES_DIR}/Shaders"
 
+# --- 0. INSTALL MOLTENVK IF MISSING ---
+if command -v brew >/dev/null 2>&1; then
+    if ! brew list molten-vk >/dev/null 2>&1; then
+        echo "🍺 Installing molten-vk via Homebrew..."
+        brew install molten-vk
+    fi
+fi
+
+build_custom_ffmpeg() {
+    echo "🛠️  Building custom FFmpeg with Vulkan and libplacebo..."
+    local temp_build_dir="${SRCROOT}/ffmpeg_build"
+    mkdir -p "$temp_build_dir"
+    cd "$temp_build_dir"
+    
+    if [[ ! -d "ffmpeg" ]]; then
+        git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
+    fi
+    cd ffmpeg
+    
+    ./configure \
+        --prefix="${temp_build_dir}/dist" \
+        --enable-vulkan \
+        --enable-libplacebo \
+        --enable-gpl \
+        --enable-nonfree \
+        --disable-shared \
+        --enable-static
+    make -j$(sysctl -n hw.ncpu)
+    make install
+    
+    FFMPEG_BIN="${temp_build_dir}/dist/bin/ffmpeg"
+    FFPROBE_BIN="${temp_build_dir}/dist/bin/ffprobe"
+    cd "${SRCROOT}"
+}
+
 # --- 1. LOCATE FFMPEG & FFPROBE ---
 if [[ -x "$VENDORED_FFMPEG" && -x "$VENDORED_FFPROBE" ]]; then
     FFMPEG_BIN="$VENDORED_FFMPEG"
@@ -70,6 +105,16 @@ if [[ "$PLACEBO_ABI" != "351" ]]; then
     exit 1
 fi
 echo "✅ Using libplacebo ABI: $PLACEBO_ABI"
+
+# Verify if libplacebo is linked against libMoltenVK or if Vulkan support is present
+if ! otool -L "$FFMPEG_BIN" 2>/dev/null | grep -qi "MoltenVK"; then
+    echo "⚠️  Selected ffmpeg does not show direct MoltenVK linkage."
+    # If Homebrew ffmpeg lacks Vulkan/MoltenVK support, build custom fallback
+    if [[ "${BREW_FFMPEG_PREFIX:-}" != "" ]]; then
+        echo "⚠️  Homebrew ffmpeg might lack Vulkan support. Attempting custom build fallback..."
+        build_custom_ffmpeg
+    fi
+fi
 
 # --- 2. COPY BINARIES ---
 cp -f "$FFMPEG_BIN" "${FRAMEWORKS_DIR}/ffmpeg"

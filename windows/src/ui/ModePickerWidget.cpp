@@ -59,15 +59,12 @@ void ModePickerWidget::initUI() {
     segmentLayout->setContentsMargins(0, 0, 0, 0);
     segmentLayout->setSpacing(2);
 
-    m_hqButton = new QPushButton("HQ", this);
-    m_fastButton = new QPushButton("Fast", this);
+    m_hqButton = new QPushButton("Anime4K (HQ)", this);
+    m_fastButton = new QPushButton("Anime4K (Fast)", this);
     m_noUpButton = new QPushButton("No Upscale", this);
     m_neuralButton = new QPushButton("Neural SR", this);
     m_specialButton = new QPushButton("⚡ Special", this);
-
-    // Special is macOS/Apple Silicon ANE only
-    m_specialButton->setEnabled(false);
-    m_specialButton->setToolTip("Requires macOS with Apple Silicon Neural Engine");
+    m_specialButton->setEnabled(true);
 
     QString segmentStyle = 
         "QPushButton {"

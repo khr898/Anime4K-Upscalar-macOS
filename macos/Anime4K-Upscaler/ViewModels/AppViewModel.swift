@@ -116,6 +116,9 @@ final class AppViewModel {
 
     init() {
         validateDependencies()
+        if dependencyErrors.contains("libMoltenVK.dylib") {
+            configuration.mode = .modeA_Fast
+        }
     }
 
     // MARK: - Dependency Validation

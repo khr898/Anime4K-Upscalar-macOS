@@ -13,7 +13,7 @@ DeviceHardwareProfile DeviceHardwareProfile::detect() {
 }
 
 QString DeviceHardwareProfile::hqModeHeader() const {
-    return QString("HQ Modes (Recommended for %1)").arg(chipName);
+    return "Anime4K (HQ)";
 }
 
 // MARK: - Anime4K Shader Files
@@ -71,10 +71,10 @@ QString displayName(Anime4KMode mode) {
         case Anime4KMode::ESRGAN_Fast:      return "ESRGAN Fast";
         case Anime4KMode::ESRGAN_Quality:   return "ESRGAN Quality";
         case Anime4KMode::ESRGAN_General:   return "ESRGAN General";
-        case Anime4KMode::SPECIAL_Fast:     return "SPECIAL: Fast (Mac ANE)";
-        case Anime4KMode::SPECIAL_Quality:  return "SPECIAL: Quality (Mac ANE)";
-        case Anime4KMode::SPECIAL_SDRescue: return "SPECIAL: SD Rescue (Mac ANE)";
-        case Anime4KMode::SPECIAL_PiperSR_2x: return "SPECIAL: PiperSR 2x (Mac ANE)";
+        case Anime4KMode::SPECIAL_Fast:     return "SPECIAL: Fast";
+        case Anime4KMode::SPECIAL_Quality:  return "SPECIAL: Quality";
+        case Anime4KMode::SPECIAL_SDRescue: return "SPECIAL: SD Rescue";
+        case Anime4KMode::SPECIAL_PiperSR_2x: return "SPECIAL: PiperSR 2x";
     }
     return QString();
 }
@@ -99,10 +99,17 @@ QString subtitle(Anime4KMode mode) {
         case Anime4KMode::ESRGAN_Fast:      return "Anime compact model (realesr-animevideov3)";
         case Anime4KMode::ESRGAN_Quality:   return "High quality anime model (realesrgan-x4plus-anime)";
         case Anime4KMode::ESRGAN_General:   return "General / live-action model (realesrgan-x4plus)";
+#ifdef Q_OS_MAC
         case Anime4KMode::SPECIAL_Fast:     return "Core ML realesr-animevideov3 on Neural Engine";
         case Anime4KMode::SPECIAL_Quality:  return "Core ML realesrgan-x4plus-anime on Neural Engine";
         case Anime4KMode::SPECIAL_SDRescue: return "Anime4K Restore VL \u2192 Core ML realesr-animevideov3";
         case Anime4KMode::SPECIAL_PiperSR_2x: return "Core ML PiperSR 2x ANE-native upscaler";
+#else
+        case Anime4KMode::SPECIAL_Fast:     return "Vulkan realesr-animevideov3 upscaler";
+        case Anime4KMode::SPECIAL_Quality:  return "Vulkan realesrgan-x4plus-anime upscaler";
+        case Anime4KMode::SPECIAL_SDRescue: return "Anime4K Restore VL \u2192 Vulkan realesr-animevideov3";
+        case Anime4KMode::SPECIAL_PiperSR_2x: return "Vulkan realesr-animevideov3 upscaler (fallback)";
+#endif
     }
     return QString();
 }
@@ -145,7 +152,8 @@ bool involvesUpscaling(Anime4KMode mode) {
 }
 
 bool isNeuralSR(Anime4KMode mode) {
-    return mode == Anime4KMode::ESRGAN_Fast || mode == Anime4KMode::ESRGAN_Quality || mode == Anime4KMode::ESRGAN_General;
+    return mode == Anime4KMode::ESRGAN_Fast || mode == Anime4KMode::ESRGAN_Quality || mode == Anime4KMode::ESRGAN_General
+        || mode == Anime4KMode::SPECIAL_Fast || mode == Anime4KMode::SPECIAL_Quality || mode == Anime4KMode::SPECIAL_SDRescue || mode == Anime4KMode::SPECIAL_PiperSR_2x;
 }
 
 bool isSpecialANE(Anime4KMode mode) {
@@ -154,10 +162,14 @@ bool isSpecialANE(Anime4KMode mode) {
 
 QString realesrganModelName(Anime4KMode mode) {
     switch (mode) {
-        case Anime4KMode::ESRGAN_Fast:    return "realesr-animevideov3";
-        case Anime4KMode::ESRGAN_Quality: return "realesrgan-x4plus-anime";
-        case Anime4KMode::ESRGAN_General: return "realesrgan-x4plus";
-        default:                          return QString();
+        case Anime4KMode::ESRGAN_Fast:
+        case Anime4KMode::SPECIAL_Fast:
+        case Anime4KMode::SPECIAL_SDRescue:
+        case Anime4KMode::SPECIAL_PiperSR_2x: return "realesr-animevideov3";
+        case Anime4KMode::ESRGAN_Quality:
+        case Anime4KMode::SPECIAL_Quality:    return "realesrgan-x4plus-anime";
+        case Anime4KMode::ESRGAN_General:    return "realesrgan-x4plus";
+        default:                              return QString();
     }
 }
 
@@ -202,11 +214,11 @@ QVector<Anime4KShader> shaderPipeline(Anime4KMode mode) {
 
 QString displayName(ModeCategory cat) {
     switch (cat) {
-        case ModeCategory::HQ:        return DeviceHardwareProfile::detect().hqModeHeader();
-        case ModeCategory::Fast:      return "Fast Modes";
-        case ModeCategory::NoUpscale: return "No Upscale Modes (Restore Only)";
+        case ModeCategory::HQ:        return "Anime4K (HQ)";
+        case ModeCategory::Fast:      return "Anime4K (Fast)";
+        case ModeCategory::NoUpscale: return "Anime4K (No Upscale - Restore Only)";
         case ModeCategory::NeuralSR:  return "Neural Super Resolution (Real-ESRGAN)";
-        case ModeCategory::Special:   return "\u26a1 Special (Apple Silicon ANE Only)";
+        case ModeCategory::Special:   return "\u26a1 Special (Apple Silicon Only)";
     }
     return QString();
 }
@@ -532,7 +544,8 @@ JobConfiguration JobConfiguration::defaultConfig() {
         TargetResolution::Double,
         VideoCodec::HEVC_NVENC,
         CompressionMode::visuallyLossless(),
-        true
+        true,
+        6
     };
 }
 
@@ -616,6 +629,11 @@ QString FilterGraphBuilder::build(
         }
     }
 
+    if (!filterComponents.isEmpty()) {
+        filterComponents.prepend("hwupload");
+        filterComponents.append("hwdownload");
+    }
+
     filterComponents.append(QString("format=%1").arg(pixelFormat(codec)));
     return filterComponents.join(",");
 }
@@ -636,6 +654,7 @@ QStringList FFmpegArgumentBuilder::build(
     );
 
     QStringList args;
+    args.append({"-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk"});
     args.append("-y");
     args.append({"-threads", "0"});
     args.append({"-i", inputPath});
@@ -744,7 +763,7 @@ QStringList FFmpegArgumentBuilder::build(
             break;
 
         case VideoCodec::SVT_AV1:
-            args.append({"-preset", "6"});
+            args.append({"-preset", QString::number(configuration.svtAV1Preset)});
             args.append({"-svtav1-params", "tune=0"});
             if (configuration.compression.isFixedBitrate()) {
                 int mbps = configuration.compression.bitrateMbps();

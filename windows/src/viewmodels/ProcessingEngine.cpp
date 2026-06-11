@@ -176,12 +176,20 @@ void ProcessingEngine::executeNextStep() {
         emit jobProgressUpdated(m_currentJob);
 
         QString ffmpeg = FFmpegLocator::ffmpegPath();
-        QStringList arguments = {
-            "-y",
-            "-i", m_currentJob->file.filePath,
-            "-qscale:v", "1",
-            m_tempFramesDir + "/%08d.png"
-        };
+        QStringList arguments;
+        if (m_currentJob->configuration.mode == Anime4KMode::SPECIAL_SDRescue) {
+            arguments << "-init_hw_device" << "vulkan=vk:0" << "-filter_hw_device" << "vk";
+        }
+        arguments << "-y" << "-i" << m_currentJob->file.filePath;
+        if (m_currentJob->configuration.mode == Anime4KMode::SPECIAL_SDRescue) {
+            m_currentJob->appendLog("Applying Anime4K Restore VL pre-processing pass...");
+            QString shaderDir = FFmpegLocator::shaderDirectory();
+            QString shaderPath = QDir(shaderDir).filePath("Anime4K_Restore_CNN_VL.glsl");
+            QString escapedPath = shaderPath;
+            escapedPath.replace("'", "'\\''");
+            arguments << "-vf" << QString("hwupload,libplacebo=custom_shader_path='%1',hwdownload,format=rgb24").arg(escapedPath);
+        }
+        arguments << "-qscale:v" << "1" << m_tempFramesDir + "/%08d.png";
 
         m_currentJob->appendLog("$ ffmpeg " + arguments.join(" "));
         
@@ -360,7 +368,7 @@ void ProcessingEngine::executeNextStep() {
                 break;
 
             case VideoCodec::SVT_AV1:
-                arguments.append({"-preset", "6"});
+                arguments.append({"-preset", QString::number(m_currentJob->configuration.svtAV1Preset)});
                 arguments.append({"-svtav1-params", "tune=0"});
                 if (m_currentJob->configuration.compression.isFixedBitrate()) {
                     int mbps = m_currentJob->configuration.compression.bitrateMbps();
