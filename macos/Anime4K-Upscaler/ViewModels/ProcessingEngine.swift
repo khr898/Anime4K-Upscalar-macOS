@@ -601,10 +601,11 @@ final class ProcessingEngine {
             
             let shaderPath = "\(FFmpegLocator.shaderDirectoryPath)/Anime4K_Restore_CNN_VL.glsl"
             let decodeArgs = [
+                "-init_hw_device", "vulkan=vk:0",
+                "-filter_hw_device", "vk",
                 "-y",
                 "-i", job.file.url.path,
-                "-vf", "libplacebo=custom_shader_path=\(shaderPath)",
-                "-pix_fmt", "rgb24",
+                "-vf", "hwupload,libplacebo=custom_shader_path=\(shaderPath),hwdownload,format=rgb24",
                 framesDir.appendingPathComponent("%08d.png").path
             ]
             

@@ -35,7 +35,7 @@ struct DeviceHardwareProfile {
     }()
 
     var hqModeHeader: String {
-        "HQ Modes (Recommended for \(chipName))"
+        "Anime4K (HQ)"
     }
 }
 
@@ -322,21 +322,16 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
 
 /// Grouping for sectioned picker display.
 enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
-    case special   = "⚡ Special (Recommended for M3 Pro)"
+    case special   = "⚡ Special (Recommended for Apple Silicon)"
     case neuralSR  = "Neural SR"
-    case hq        = "HQ Modes"
-    case fast      = "Fast Modes"
+    case hq        = "Anime4K (HQ)"
+    case fast      = "Anime4K (Fast)"
     case noUpscale = "No Upscale Modes (Restore Only)"
 
     var id: String { rawValue }
 
     var displayName: String {
-        switch self {
-        case .hq:
-            return DeviceHardwareProfile.current.hqModeHeader
-        case .fast, .noUpscale, .neuralSR, .special:
-            return rawValue
-        }
+        rawValue
     }
 
     /// The SF Symbol for each category's section header.
@@ -709,6 +704,7 @@ struct JobConfiguration: Sendable, Equatable {
     var codec: VideoCodec
     var compression: CompressionMode
     var longGOPEnabled: Bool
+    var svtAV1Preset: Int = 6
 
     /// Default configuration: Mode A (HQ), 2x, HEVC Hardware, Visually Lossless, Long GOP on.
     static let `default` = JobConfiguration(
@@ -716,7 +712,8 @@ struct JobConfiguration: Sendable, Equatable {
         resolution: .double,
         codec: .hevcVideoToolbox,
         compression: .visuallyLossless,
-        longGOPEnabled: true
+        longGOPEnabled: true,
+        svtAV1Preset: 6
     )
 
     static func == (lhs: JobConfiguration, rhs: JobConfiguration) -> Bool {
@@ -724,7 +721,8 @@ struct JobConfiguration: Sendable, Equatable {
         lhs.resolution == rhs.resolution &&
         lhs.codec == rhs.codec &&
         lhs.compression == rhs.compression &&
-        lhs.longGOPEnabled == rhs.longGOPEnabled
+        lhs.longGOPEnabled == rhs.longGOPEnabled &&
+        lhs.svtAV1Preset == rhs.svtAV1Preset
     }
 }
 
@@ -895,6 +893,12 @@ struct FilterGraphBuilder {
             }
         }
 
+        if !filterComponents.isEmpty {
+            // Force Vulkan hardware upload/download to bypass OpenGL issues
+            filterComponents.insert("hwupload", at: 0)
+            filterComponents.append("hwdownload")
+        }
+
         // Append pixel format conversion as the final filter
         filterComponents.append("format=\(codec.pixelFormat)")
 
@@ -930,12 +934,13 @@ struct FFmpegArgumentBuilder {
         var args: [String] = []
         args.reserveCapacity(32) // ~28-32 args typical; avoids 3-4 backing-store reallocations
 
+        // Initialize Vulkan hardware device for libplacebo
+        args.append(contentsOf: ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk"])
+
         // Overwrite output, input file
         args.append(contentsOf: ["-y"])
         args.append(contentsOf: ["-threads", "0"])
         args.append(contentsOf: ["-i", inputURL.path])
-
-        // Let libplacebo initialize its device backend; explicit init can fail on some systems.
 
         // Video filter graph
         args.append(contentsOf: ["-vf", filterGraph])
@@ -981,7 +986,7 @@ struct FFmpegArgumentBuilder {
 
         case .svtAV1:
             args.append(contentsOf: [
-                "-preset", "6",
+                "-preset", "\(configuration.svtAV1Preset)",
                 "-svtav1-params", "tune=0"
             ])
 

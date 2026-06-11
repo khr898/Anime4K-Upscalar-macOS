@@ -22,6 +22,10 @@ struct ConfigurationPanel: View {
                 // Codec
                 codecSection
 
+                if viewModel.configuration.codec == .svtAV1 {
+                    svtPresetSection
+                }
+
                 // Compression
                 compressionSection
 
@@ -378,5 +382,55 @@ struct ConfigurationPanel: View {
             Spacer()
         }
         .padding(.top, 8)
+    }
+
+    // MARK: - SVT-AV1 Preset Section
+
+    @ViewBuilder
+    private var svtPresetSection: some View {
+        @Bindable var viewModel = viewModel
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("AV1 Speed Preset", systemImage: "gauge.with.dots.needle.67percent")
+                    .font(.headline)
+
+                HStack {
+                    Slider(
+                        value: Binding(
+                            get: { Double(viewModel.configuration.svtAV1Preset) },
+                            set: { viewModel.configuration.svtAV1Preset = Int($0) }
+                        ),
+                        in: 0...13,
+                        step: 1
+                    )
+
+                    Text("\(viewModel.configuration.svtAV1Preset)")
+                        .font(.body)
+                        .fontWeight(.semibold)
+                        .frame(width: 24, alignment: .trailing)
+                        .monospacedDigit()
+                }
+
+                Text(svtPresetDescription(viewModel.configuration.svtAV1Preset))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(4)
+        }
+    }
+
+    private func svtPresetDescription(_ preset: Int) -> String {
+        switch preset {
+        case 0...3:
+            return "Archival (Slowest, Maximum Compression)"
+        case 4...6:
+            return "Standard (Balanced Speed & Quality - Recommended)"
+        case 7...10:
+            return "Fast (High Speed, Moderate Compression)"
+        case 11...13:
+            return "Real-time (Ultra Fast, Lower Compression)"
+        default:
+            return ""
+        }
     }
 }
