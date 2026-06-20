@@ -29,5 +29,5 @@ DerivedData/
 *.opendb
 windows/build-x64/
 build-x64/
-windows/vendor/
+windows/vendor/**/*.exe
 

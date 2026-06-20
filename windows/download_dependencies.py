@@ -83,26 +83,27 @@ def process_realesrgan(target_dir):
         extract_dir = os.path.join(tmpdir, "extracted")
         extract_archive(archive_path, extract_dir)
         
-        # We need to find realesrgan-ncnn-vulkan.exe and models/ directory
+        # We need to find realesrgan-ncnn-vulkan.exe (models are tracked in Git)
         found_exe = False
-        found_models = False
+        found_models = True
         for root, dirs, files in os.walk(extract_dir):
             for file in files:
                 if file.lower() == "realesrgan-ncnn-vulkan.exe":
                     shutil.copy2(os.path.join(root, file), os.path.join(target_dir, "realesrgan-ncnn-vulkan.exe"))
                     found_exe = True
-            if "models" in dirs:
-                src_models = os.path.join(root, "models")
-                dest_models = os.path.join(target_dir, "models")
-                if os.path.exists(dest_models):
-                    shutil.rmtree(dest_models)
-                shutil.copytree(src_models, dest_models)
-                found_models = True
+            # Models are now tracked in Git, so we comment out the copying code to prevent overwrites:
+            # if "models" in dirs:
+            #     src_models = os.path.join(root, "models")
+            #     dest_models = os.path.join(target_dir, "models")
+            #     if os.path.exists(dest_models):
+            #         shutil.rmtree(dest_models)
+            #     shutil.copytree(src_models, dest_models)
+            #     found_models = True
                 
         if found_exe and found_models:
-            print(f"Successfully placed realesrgan-ncnn-vulkan.exe and models/ in {target_dir}")
+            print(f"Successfully placed realesrgan-ncnn-vulkan.exe in {target_dir}")
         else:
-            print(f"Error: Could not find realesrgan-ncnn-vulkan.exe or models/ directory in extracted files.", file=sys.stderr)
+            print(f"Error: Could not find realesrgan-ncnn-vulkan.exe in extracted files.", file=sys.stderr)
             sys.exit(1)
 
 def main():
