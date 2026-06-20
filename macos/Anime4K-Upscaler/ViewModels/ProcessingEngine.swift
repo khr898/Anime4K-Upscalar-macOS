@@ -30,6 +30,11 @@ final class ProcessingEngine {
     @ObservationIgnored private var cancellationRequested: Bool = false
     @ObservationIgnored private var activityToken: NSObjectProtocol?
 
+    @ObservationIgnored private var lastStderrFlush: Date = .distantPast
+    @ObservationIgnored private var lastStdoutFlush: Date = .distantPast
+    @ObservationIgnored private var firstMetricWallDate: Date?
+    @ObservationIgnored private var firstMetricMediaSeconds: Double?
+
     /// Minimum interval between UI updates from pipe handlers.
     private static let uiUpdateIntervalMs: Int = 100 // 10 Hz cap
 
@@ -155,140 +160,109 @@ final class ProcessingEngine {
                 // Store process handle for cancellation
                 await MainActor.run { [weak self] in
                     self?.currentProcess = process
+                    self?.resetPerformanceMetrics()
                     job.processHandle = process
                 }
 
-                // --- Throttled stderr state ---
-                nonisolated(unsafe) var lastStderrFlush = ContinuousClock.now
-                nonisolated(unsafe) var pendFrame: Int?
-                nonisolated(unsafe) var pendTime: String?
-                nonisolated(unsafe) var pendFps: String?
-                nonisolated(unsafe) var pendProgress: Double?
-
+                // --- Stderr pipe handler ---
                 stderrHandle.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty,
                           let text = String(data: data, encoding: .utf8) else { return }
 
                     var logBatch: [String] = []
+                    var lastProgress: FFmpegProgress?
 
                     for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
                         let lineStr = String(line)
                         if let prog = FFmpegProgress.parse(line: lineStr) {
-                            pendFrame = prog.frame
-                            pendTime = prog.time
-                            pendFps = String(format: "%.1f", prog.fps)
-                            if capturedDuration > 0 {
-                                pendProgress = min(prog.timeSeconds / capturedDuration, 1.0)
-                            }
+                            lastProgress = prog
                         } else {
                             logBatch.append(lineStr)
                         }
                     }
 
-                    let now = ContinuousClock.now
-                    let shouldFlush = (now - lastStderrFlush) >= .milliseconds(throttleMs)
-
-                    if shouldFlush || !logBatch.isEmpty {
-                        let fr = pendFrame
-                        let ti = pendTime
-                        let fp = pendFps
-                        let pr = pendProgress
-                        let lg = logBatch
-                        pendFrame = nil
-                        pendTime = nil
-                        pendFps = nil
-                        pendProgress = nil
-                        lastStderrFlush = now
-
+                    if lastProgress != nil || !logBatch.isEmpty {
+                        let parsedProgress = lastProgress
+                        let logs = logBatch
                         Task { @MainActor in
-                            if let v = fr { job.currentFrame = v }
-                            if let v = ti { job.currentTime = v }
-                            if let v = fp { job.fps = v }
-                            if let v = pr { job.progress = v }
-                            for l in lg { job.appendLog(l) }
+                            var frame: Int?
+                            var time: String?
+                            var fps: String?
+                            var progress: Double?
+
+                            if let prog = parsedProgress {
+                                frame = prog.frame
+                                time = prog.time
+                                fps = String(format: "%.1f", prog.fps)
+                                if capturedDuration > 0 {
+                                    progress = min(prog.timeSeconds / capturedDuration, 1.0)
+                                }
+                            }
+
+                            self?.handleStderrProgress(
+                                frame: frame,
+                                time: time,
+                                fps: fps,
+                                progress: progress,
+                                logs: logs,
+                                job: job
+                            )
                         }
                     }
                 }
 
-                // --- Throttled stdout state ---
-                nonisolated(unsafe) var lastStdoutFlush = ContinuousClock.now
-                nonisolated(unsafe) var soProgress: Double?
-                nonisolated(unsafe) var soFps: String?
-                nonisolated(unsafe) var soFrame: Int?
-                nonisolated(unsafe) var soMediaSeconds: Double?
-                nonisolated(unsafe) var firstMetricWallDate: Date?
-                nonisolated(unsafe) var firstMetricMediaSeconds: Double?
-
+                // --- Stdout pipe handler ---
                 stdoutHandle.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty,
                           let text = String(data: data, encoding: .utf8) else { return }
 
-                    // Work directly on Substring from split — avoids one
-                    // String heap allocation per line vs String(line).
-                    // Use dropFirst(n) instead of split(separator:"=").last
-                    // to eliminate per-line Array<Substring> allocation.
+                    var lastUs: Double?
+                    var lastMs: Double?
+                    var lastFps: String?
+                    var lastFrame: Int?
+
                     for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
                         if line.hasPrefix("out_time_us=") {
-                            if let us = Double(line.dropFirst(12)) {
-                                let mediaSeconds = us / 1_000_000.0
-                                soMediaSeconds = mediaSeconds
-                                if capturedDuration > 0 {
-                                    soProgress = min(mediaSeconds / capturedDuration, 1.0)
-                                }
-                            }
+                            lastUs = Double(line.dropFirst(12))
                         } else if line.hasPrefix("out_time_ms=") {
-                            if let us = Double(line.dropFirst(12)) {
-                                let mediaSeconds = us / 1_000_000.0
-                                soMediaSeconds = mediaSeconds
-                                if capturedDuration > 0 {
-                                    soProgress = min(mediaSeconds / capturedDuration, 1.0)
-                                }
-                            }
+                            lastMs = Double(line.dropFirst(12))
                         } else if line.hasPrefix("fps=") {
-                            soFps = String(line.dropFirst(4))
+                            lastFps = String(line.dropFirst(4))
                         } else if line.hasPrefix("frame=") {
-                            if let f = Int(line.dropFirst(6)) { soFrame = f }
+                            if let f = Int(line.dropFirst(6)) { lastFrame = f }
                         }
                     }
 
-                    let now = ContinuousClock.now
-                    if (now - lastStdoutFlush) >= .milliseconds(throttleMs) {
-                        let p = soProgress
-                        let f = soFps
-                        let fr = soFrame
-                        let mediaSeconds = soMediaSeconds
-                        soProgress = nil
-                        soFps = nil
-                        soFrame = nil
-                        soMediaSeconds = nil
-                        lastStdoutFlush = now
-
+                    if lastUs != nil || lastMs != nil || lastFps != nil || lastFrame != nil {
+                        let us = lastUs
+                        let ms = lastMs
+                        let fps = lastFps
+                        let frame = lastFrame
                         Task { @MainActor in
-                            if let v = p { job.progress = v }
-                            if let v = f { job.fps = v }
-                            if let v = fr { job.currentFrame = v }
+                            var progress: Double?
+                            var mediaSeconds: Double?
 
-                            if let mediaSeconds {
-                                if firstMetricWallDate == nil && mediaSeconds > 0 {
-                                    firstMetricWallDate = Date()
-                                    firstMetricMediaSeconds = mediaSeconds
+                            if let us {
+                                mediaSeconds = us / 1_000_000.0
+                                if capturedDuration > 0 {
+                                    progress = min(mediaSeconds! / capturedDuration, 1.0)
                                 }
-
-                                if let startWall = firstMetricWallDate,
-                                   let startMedia = firstMetricMediaSeconds {
-                                    let elapsed = max(Date().timeIntervalSince(startWall), 0.001)
-                                    let mediaDelta = max(mediaSeconds - startMedia, 0.0)
-
-                                    if elapsed >= 0.35, mediaDelta > 0 {
-                                        let speed = mediaDelta / elapsed
-                                        job.speed = String(format: "x%.3f", speed)
-                                    } else {
-                                        job.speed = "warming..."
-                                    }
+                            } else if let ms {
+                                mediaSeconds = ms / 1_000_000.0
+                                if capturedDuration > 0 {
+                                    progress = min(mediaSeconds! / capturedDuration, 1.0)
                                 }
                             }
+
+                            self?.handleStdoutProgress(
+                                progress: progress,
+                                fps: fps,
+                                frame: frame,
+                                mediaSeconds: mediaSeconds,
+                                job: job
+                            )
                         }
                     }
                 }
@@ -297,15 +271,8 @@ final class ProcessingEngine {
                 process.terminationHandler = { [weak self] proc in
                     cleanupPipes()
 
-                    // Flush any remaining pending values
-                    let fFrame = pendFrame ?? soFrame
-                    let fProg = pendProgress ?? soProgress
-                    let fFps = pendFps ?? soFps
-
                     Task { @MainActor [weak self] in
-                        if let v = fFrame { job.currentFrame = v }
-                        if let v = fProg { job.progress = v }
-                        if let v = fFps { job.fps = v }
+                        self?.resetPerformanceMetrics()
 
                         job.endDate = Date()
                         self?.currentProcess = nil
@@ -895,5 +862,81 @@ final class ProcessingEngine {
             job.errorMessage = "Reader/Writer failed: reader status \(readerStatusRaw), writer status \(writer.status.rawValue)"
             job.appendLog("❌ Error: \(job.errorMessage!)")
         }
+    }
+
+    // MARK: - Progress Updates (MainActor-Isolated)
+
+    /// Helper to process stderr progress and log lines from FFmpeg
+    private func handleStderrProgress(
+        frame: Int?,
+        time: String?,
+        fps: String?,
+        progress: Double?,
+        logs: [String],
+        force: Bool = false,
+        job: ProcessingJob
+    ) {
+        let now = Date()
+        let shouldFlush = force || now.timeIntervalSince(lastStderrFlush) >= Double(Self.uiUpdateIntervalMs) / 1000.0
+
+        if shouldFlush {
+            lastStderrFlush = now
+            if let frame { job.currentFrame = frame }
+            if let time { job.currentTime = time }
+            if let fps { job.fps = fps }
+            if let progress { job.progress = progress }
+        }
+
+        for log in logs {
+            job.appendLog(log)
+        }
+    }
+
+    /// Helper to process stdout progress from FFmpeg
+    private func handleStdoutProgress(
+        progress: Double?,
+        fps: String?,
+        frame: Int?,
+        mediaSeconds: Double?,
+        force: Bool = false,
+        job: ProcessingJob
+    ) {
+        let now = Date()
+        let shouldFlush = force || now.timeIntervalSince(lastStdoutFlush) >= Double(Self.uiUpdateIntervalMs) / 1000.0
+
+        if shouldFlush {
+            lastStdoutFlush = now
+            if let progress { job.progress = progress }
+            if let fps { job.fps = fps }
+            if let frame { job.currentFrame = frame }
+
+            if let mediaSeconds {
+                if firstMetricWallDate == nil && mediaSeconds > 0 {
+                    firstMetricWallDate = Date()
+                    firstMetricMediaSeconds = mediaSeconds
+                }
+
+                if let startWall = firstMetricWallDate,
+                   let startMedia = firstMetricMediaSeconds {
+                    let elapsed = max(Date().timeIntervalSince(startWall), 0.001)
+                    let mediaDelta = max(mediaSeconds - startMedia, 0.0)
+
+                    if elapsed >= 0.35, mediaDelta > 0 {
+                        let speed = mediaDelta / elapsed
+                        job.speed = String(format: "x%.3f", speed)
+                    } else {
+                        job.speed = "warming..."
+                    }
+                }
+            }
+        }
+    }
+
+    /// Helper to reset performance metrics for a new job
+    private func resetPerformanceMetrics() {
+        lastStderrFlush = .distantPast
+        lastStdoutFlush = .distantPast
+        firstMetricWallDate = nil
+        firstMetricMediaSeconds = nil
     }
 }
