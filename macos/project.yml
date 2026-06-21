@@ -32,6 +32,10 @@ targets:
         name: Shaders
         type: folder
         buildPhase: resources
+      - path: Anime4K-Upscaler/Resources/Models
+        name: Models
+        type: folder
+        buildPhase: resources
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.anime4k.upscaler
