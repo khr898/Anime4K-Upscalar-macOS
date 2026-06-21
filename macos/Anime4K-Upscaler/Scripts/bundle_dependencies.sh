@@ -63,56 +63,101 @@ build_custom_ffmpeg() {
 }
 
 # --- 1. LOCATE FFMPEG & FFPROBE ---
+FFMPEG_BIN=""
+FFPROBE_BIN=""
+
+# 1a. Check if we already have a fully functioning vendored ffmpeg
 if [[ -x "$VENDORED_FFMPEG" && -x "$VENDORED_FFPROBE" ]]; then
-    FFMPEG_BIN="$VENDORED_FFMPEG"
-    FFPROBE_BIN="$VENDORED_FFPROBE"
-    echo "📦 Using vendored ffmpeg tools from: $VENDORED_TOOLS_DIR"
-else
+    # Test if it runs. If it fails due to dyld (missing libavdevice/etc.), we can try downloading it.
+    if "$VENDORED_FFMPEG" -version >/dev/null 2>&1; then
+        FFMPEG_BIN="$VENDORED_FFMPEG"
+        FFPROBE_BIN="$VENDORED_FFPROBE"
+        echo "📦 Using working vendored ffmpeg tools from: $VENDORED_TOOLS_DIR"
+    fi
+fi
+
+# 1b. If not found or not working, check device's system/homebrew ffmpeg
+if [[ -z "$FFMPEG_BIN" ]]; then
     BREW_FFMPEG_PREFIX=""
     if command -v brew >/dev/null 2>&1; then
         BREW_FFMPEG_PREFIX=$(brew --prefix ffmpeg 2>/dev/null || true)
     fi
 
+    CANDIDATE_FFMPEG=""
+    CANDIDATE_FFPROBE=""
     if [[ -n "$BREW_FFMPEG_PREFIX" && -x "$BREW_FFMPEG_PREFIX/bin/ffmpeg" ]]; then
-        FFMPEG_BIN="$BREW_FFMPEG_PREFIX/bin/ffmpeg"
-        FFPROBE_BIN="$BREW_FFMPEG_PREFIX/bin/ffprobe"
+        CANDIDATE_FFMPEG="$BREW_FFMPEG_PREFIX/bin/ffmpeg"
+        CANDIDATE_FFPROBE="$BREW_FFMPEG_PREFIX/bin/ffprobe"
     else
-        FFMPEG_BIN=$(command -v ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
-        FFPROBE_BIN=$(command -v ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
+        CANDIDATE_FFMPEG=$(command -v ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
+        CANDIDATE_FFPROBE=$(command -v ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
+    fi
+
+    # Check if the device candidate actually supports libplacebo
+    if [[ -x "$CANDIDATE_FFMPEG" ]] && otool -L "$CANDIDATE_FFMPEG" 2>/dev/null | grep -q "libplacebo"; then
+        FFMPEG_BIN="$CANDIDATE_FFMPEG"
+        FFPROBE_BIN="$CANDIDATE_FFPROBE"
+        echo "📦 Using device ffmpeg with libplacebo from: $FFMPEG_BIN"
     fi
 fi
 
-if [[ ! -f "$FFMPEG_BIN" ]]; then
-    echo "error: ffmpeg not found. Install via: brew install ffmpeg"
-    exit 1
-fi
-
-if [[ ! -f "$FFPROBE_BIN" ]]; then
-    echo "error: ffprobe not found."
-    exit 1
+# 1c. If still not found, download the prebuilt binaries from the release DMG
+if [[ -z "$FFMPEG_BIN" ]]; then
+    echo "📥 No working ffmpeg with libplacebo found. Downloading from release..."
+    mkdir -p "${VENDORED_TOOLS_DIR}"
+    
+    # Download DMG
+    DMG_PATH="/tmp/Anime4K_Upscaler_download.dmg"
+    curl -L -o "$DMG_PATH" "https://github.com/khr898/Anime4K-Upscalar-macOS/releases/download/v1.1.07042026/Anime4K_Upscaler_v1.1.07042026_arm64.dmg"
+    
+    # Mount DMG
+    MNT_DIR="/tmp/mnt_anime4k_download"
+    mkdir -p "$MNT_DIR"
+    hdiutil attach "$DMG_PATH" -mountpoint "$MNT_DIR" -nobrowse -quiet
+    
+    # Extract
+    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/ffmpeg" "${VENDORED_FFMPEG}"
+    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/ffprobe" "${VENDORED_FFPROBE}"
+    
+    # Also extract the libplacebo that matches it to the vendored dylibs dir
+    mkdir -p "${VENDORED_LIB_DIR}"
+    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/libplacebo.351.dylib" "${VENDORED_LIBPLACEBO}"
+    
+    # Detach and clean up
+    hdiutil detach "$MNT_DIR" -quiet
+    rm -rf "$MNT_DIR" "$DMG_PATH"
+    
+    chmod +x "${VENDORED_FFMPEG}" "${VENDORED_FFPROBE}"
+    
+    FFMPEG_BIN="$VENDORED_FFMPEG"
+    FFPROBE_BIN="$VENDORED_FFPROBE"
+    echo "✅ Downloaded and prepared vendored ffmpeg."
 fi
 
 echo "📦 Bundling ffmpeg from: $FFMPEG_BIN"
 echo "📦 Bundling ffprobe from: $FFPROBE_BIN"
 
-# Enforce libplacebo-backed ffmpeg using linkage checks (works even when
-# the binary cannot execute in CI prior to relocation/rewrite).
+# Check libplacebo-backed ffmpeg using linkage checks
 PLACEBO_ABI=$(otool -L "$FFMPEG_BIN" 2>/dev/null | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1)
-if [[ "$PLACEBO_ABI" != "351" ]]; then
-    echo "error: selected ffmpeg is not linked against libplacebo ABI 351"
-    echo "error: selected ffmpeg path: $FFMPEG_BIN"
-    echo "error: detected ABI: ${PLACEBO_ABI:-none}"
-    exit 1
+if [[ -z "$PLACEBO_ABI" ]]; then
+    if otool -L "$FFMPEG_BIN" 2>/dev/null | grep -q "libplacebo"; then
+        PLACEBO_ABI="dylib"
+    else
+        echo "error: selected ffmpeg is not linked against libplacebo"
+        exit 1
+    fi
 fi
-echo "✅ Using libplacebo ABI: $PLACEBO_ABI"
+echo "✅ Using libplacebo ABI/suffix: $PLACEBO_ABI"
 
 # Verify if libplacebo is linked against libMoltenVK or if Vulkan support is present
-if ! otool -L "$FFMPEG_BIN" 2>/dev/null | grep -qi "MoltenVK"; then
-    echo "⚠️  Selected ffmpeg does not show direct MoltenVK linkage."
-    # If Homebrew ffmpeg lacks Vulkan/MoltenVK support, build custom fallback
-    if [[ "${BREW_FFMPEG_PREFIX:-}" != "" ]]; then
-        echo "⚠️  Homebrew ffmpeg might lack Vulkan support. Attempting custom build fallback..."
-        build_custom_ffmpeg
+if [[ "$FFMPEG_BIN" != "$VENDORED_FFMPEG" ]]; then
+    if ! otool -L "$FFMPEG_BIN" 2>/dev/null | grep -qi "MoltenVK"; then
+        echo "⚠️  Selected ffmpeg does not show direct MoltenVK linkage."
+        # If Homebrew ffmpeg lacks Vulkan/MoltenVK support, build custom fallback
+        if [[ "${BREW_FFMPEG_PREFIX:-}" != "" ]]; then
+            echo "⚠️  Homebrew ffmpeg might lack Vulkan support. Attempting custom build fallback..."
+            build_custom_ffmpeg
+        fi
     fi
 fi
 
@@ -207,33 +252,22 @@ find_moltenvk_path() {
 
 relink_moltenvk_refs() {
     local binary="$1"
-    local moltenvk_refs=(
-        "@rpath/libMoltenVK.dylib"
-        "/opt/homebrew/lib/libMoltenVK.dylib"
-        "/opt/homebrew/opt/molten-vk/lib/libMoltenVK.dylib"
-        "/usr/local/lib/libMoltenVK.dylib"
-    )
-
-    local ref
-    for ref in "${moltenvk_refs[@]}"; do
-        install_name_tool -change "$ref" "@executable_path/../Frameworks/libMoltenVK.dylib" "$binary" 2>/dev/null || true
-    done
+    local moltenvk_ref
+    moltenvk_ref=$(otool -L "$binary" 2>/dev/null | awk 'NR>1 {print $1}' | grep "libMoltenVK" | head -1 || true)
+    if [[ -n "$moltenvk_ref" ]]; then
+        install_name_tool -change "$moltenvk_ref" "@executable_path/../Frameworks/libMoltenVK.dylib" "$binary" 2>/dev/null || true
+    fi
 }
 
 relink_libplacebo_refs() {
     local binary="$1"
-    local placebo_refs=(
-        "@rpath/libplacebo.351.dylib"
-        "@rpath/libplacebo.dylib"
-        "/opt/homebrew/lib/libplacebo.351.dylib"
-        "/opt/homebrew/opt/libplacebo/lib/libplacebo.351.dylib"
-        "/usr/local/lib/libplacebo.351.dylib"
-    )
-
-    local ref
-    for ref in "${placebo_refs[@]}"; do
-        install_name_tool -change "$ref" "@executable_path/../Frameworks/libplacebo.351.dylib" "$binary" 2>/dev/null || true
-    done
+    local placebo_ref
+    placebo_ref=$(otool -L "$binary" 2>/dev/null | awk 'NR>1 {print $1}' | grep "libplacebo" | head -1 || true)
+    if [[ -n "$placebo_ref" ]]; then
+        local placebo_name
+        placebo_name=$(basename "$placebo_ref")
+        install_name_tool -change "$placebo_ref" "@executable_path/../Frameworks/$placebo_name" "$binary" 2>/dev/null || true
+    fi
 }
 
 copy_dylibs_recursive() {
@@ -241,7 +275,7 @@ copy_dylibs_recursive() {
     local depth="${2:-0}"
 
     # Limit recursion depth to prevent runaway chains
-    if (( depth > 8 )); then
+    if (( depth > 12 )); then
         return
     fi
 
@@ -272,6 +306,9 @@ copy_dylibs_recursive() {
             actual_path=$(resolve_rpath_dep "$dep_name" 2>/dev/null || true)
         else
             actual_path="$dep"
+            if [[ ! -f "$actual_path" ]]; then
+                actual_path=$(resolve_rpath_dep "$dep_name" 2>/dev/null || true)
+            fi
         fi
 
         if [[ ! -f "$dest" ]]; then
@@ -299,9 +336,11 @@ copy_dylibs_recursive "${FRAMEWORKS_DIR}/ffprobe"
 
 if [[ -f "$VENDORED_LIBPLACEBO" ]]; then
     echo "📦 Using vendored libplacebo from: $VENDORED_LIBPLACEBO"
-    cp -f "$VENDORED_LIBPLACEBO" "${FRAMEWORKS_DIR}/libplacebo.351.dylib"
-    chmod 644 "${FRAMEWORKS_DIR}/libplacebo.351.dylib"
-    install_name_tool -id "@executable_path/../Frameworks/libplacebo.351.dylib" "${FRAMEWORKS_DIR}/libplacebo.351.dylib" 2>/dev/null || true
+    local placebo_name
+    placebo_name=$(basename "$VENDORED_LIBPLACEBO")
+    cp -f "$VENDORED_LIBPLACEBO" "${FRAMEWORKS_DIR}/$placebo_name"
+    chmod 644 "${FRAMEWORKS_DIR}/$placebo_name"
+    install_name_tool -id "@executable_path/../Frameworks/$placebo_name" "${FRAMEWORKS_DIR}/$placebo_name" 2>/dev/null || true
 fi
 
 relink_libplacebo_refs "${FRAMEWORKS_DIR}/ffmpeg"
@@ -328,7 +367,8 @@ while true; do
 
         # Fix all references within this dylib — homebrew paths AND @rpath
         all_refs=$(otool -L "$dylib" | awk 'NR>1 {gsub(/^[[:space:]]+/,""); print $1}' | grep -E '^(/opt/homebrew|/usr/local|@rpath/)' || true)
-        for ref in $all_refs; do
+        while IFS= read -r ref; do
+            [[ -z "$ref" ]] && continue
             ref_name=$(basename "$ref")
 
             if should_skip_dylib "$ref_name"; then
@@ -342,6 +382,9 @@ while true; do
                     actual=$(resolve_rpath_dep "$ref_name" 2>/dev/null || true)
                 else
                     actual="$ref"
+                    if [[ ! -f "$actual" ]]; then
+                        actual=$(resolve_rpath_dep "$ref_name" 2>/dev/null || true)
+                    fi
                 fi
                 if [[ -n "$actual" && -f "$actual" ]]; then
                     echo "  📎 Pass $PASS: Copying $ref_name (needed by $local_dylib_name)"
@@ -352,7 +395,7 @@ while true; do
             fi
 
             install_name_tool -change "$ref" "@executable_path/../Frameworks/${ref_name}" "$dylib" 2>/dev/null || true
-        done
+        done <<< "$all_refs"
     done
 
     if [[ "$NEW_FOUND" == false ]]; then
@@ -360,8 +403,8 @@ while true; do
         break
     fi
 
-    if (( PASS > 5 )); then
-        echo "  ⚠️  Exceeded 5 passes, stopping"
+    if (( PASS > 8 )); then
+        echo "  ⚠️  Exceeded 8 passes, stopping"
         break
     fi
 done
@@ -392,6 +435,38 @@ if [[ "$MOLTENVK_FOUND" == "false" ]]; then
     echo "warning: Install via: brew install molten-vk"
 fi
 
+# --- 5b. BUNDLE REALESRGAN ---
+REALESRGAN_BIN="${VENDORED_TOOLS_DIR}/realesrgan-ncnn-vulkan"
+
+if [[ ! -x "$REALESRGAN_BIN" ]]; then
+    echo "📥 realesrgan-ncnn-vulkan not found. Downloading..."
+    mkdir -p "${VENDORED_TOOLS_DIR}"
+    curl -L -o /tmp/realesrgan-macos.zip https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesrgan-ncnn-vulkan-20220424-macos.zip
+    unzip -q /tmp/realesrgan-macos.zip -d /tmp/realesrgan-macos
+    cp -f /tmp/realesrgan-macos/realesrgan-ncnn-vulkan "${REALESRGAN_BIN}"
+    mkdir -p "${VENDORED_TOOLS_DIR}/models"
+    cp -Rf /tmp/realesrgan-macos/models/* "${VENDORED_TOOLS_DIR}/models/"
+    chmod +x "${REALESRGAN_BIN}"
+    rm -rf /tmp/realesrgan-macos.zip /tmp/realesrgan-macos
+fi
+
+if [[ -f "$REALESRGAN_BIN" ]]; then
+    echo "📦 Bundling realesrgan-ncnn-vulkan from: $REALESRGAN_BIN"
+    cp -f "$REALESRGAN_BIN" "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
+    chmod +x "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
+    relink_moltenvk_refs "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
+    
+    echo "📦 Bundling realesrgan models..."
+    mkdir -p "${RESOURCES_DIR}/models"
+    cp -Rf "${VENDORED_TOOLS_DIR}/models/"* "${RESOURCES_DIR}/models/"
+else
+    echo "warning: realesrgan-ncnn-vulkan not found. ESRGAN modes will not work."
+fi
+
+# --- 5c. SETUP COREML MODELS ---
+echo "📦 Setting up CoreML models..."
+"${SRCROOT}/Anime4K-Upscaler/Scripts/download_models.sh"
+
 # --- 6. COPY SHADERS ---
 if [[ -d "$SHADERS_SRC" ]]; then
     echo "📦 Copying GLSL shaders..."
@@ -405,12 +480,42 @@ if [[ "$SKIP_ADHOC_SIGNING" == "1" ]]; then
     echo "⏭️  Skipping ad-hoc signing of bundled binaries (A4K_SKIP_ADHOC_SIGNING=1)."
 else
     echo "🔏 Codesigning all bundled binaries and dylibs..."
-    for item in "${FRAMEWORKS_DIR}/ffmpeg" "${FRAMEWORKS_DIR}/ffprobe" "${FRAMEWORKS_DIR}"/*.dylib; do
+    CO_ITEMS=("${FRAMEWORKS_DIR}/ffmpeg" "${FRAMEWORKS_DIR}/ffprobe" "${FRAMEWORKS_DIR}"/*.dylib)
+    if [[ -f "${RESOURCES_DIR}/realesrgan-ncnn-vulkan" ]]; then
+        CO_ITEMS+=("${RESOURCES_DIR}/realesrgan-ncnn-vulkan")
+    fi
+    for item in "${CO_ITEMS[@]}"; do
         [[ ! -f "$item" ]] && continue
         codesign --force --sign - --timestamp=none "$item" 2>/dev/null || true
         echo "  ✅ Signed: $(basename "$item")"
     done
 fi
+
+# --- 8. VERIFY ALL DYLIB REFERENCES ARE SELF-CONTAINED ---
+echo "🔍 Verifying all dylib references are self-contained..."
+UNRESOLVED=false
+CHECK_ITEMS=("${FRAMEWORKS_DIR}/ffmpeg" "${FRAMEWORKS_DIR}/ffprobe" "${FRAMEWORKS_DIR}"/*.dylib)
+if [[ -f "${RESOURCES_DIR}/realesrgan-ncnn-vulkan" ]]; then
+    CHECK_ITEMS+=("${RESOURCES_DIR}/realesrgan-ncnn-vulkan")
+fi
+
+for item in "${CHECK_ITEMS[@]}"; do
+    [[ ! -f "$item" ]] && continue
+    EXTERNAL_REFS=$(otool -L "$item" 2>/dev/null | grep -v ':$' | awk 'NR>1 {gsub(/^[[:space:]]+/,""); print $1}' \
+        | grep -v '^@executable_path' \
+        | grep -v '^/usr/lib/' \
+        | grep -v '^/System/' || true)
+    if [[ -n "$EXTERNAL_REFS" ]]; then
+        echo "  ❌ $(basename "$item") has unresolved external references:"
+        echo "$EXTERNAL_REFS" | sed 's/^/      /'
+        UNRESOLVED=true
+    fi
+done
+if [[ "$UNRESOLVED" == "true" ]]; then
+    echo "error: Unresolved dylib references found. The app will crash at runtime."
+    exit 1
+fi
+echo "  ✅ All references are self-contained."
 
 echo ""
 echo "✅ Dependency bundling complete."

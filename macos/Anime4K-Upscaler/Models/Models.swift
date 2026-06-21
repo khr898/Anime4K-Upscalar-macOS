@@ -314,6 +314,8 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
                 .restoreCNN_VL,
                 .restoreCNN_M
             ]
+        default:
+            return []
         }
     }
 }
@@ -868,40 +870,58 @@ struct FilterGraphBuilder {
         codec: VideoCodec,
         shaderDirectory: String
     ) -> String {
+        let shaders = mode.shaders
         var filterComponents: [String] = []
-        var currentScale = 1
 
-        for shader in mode.shaders {
-            let shaderPath = (shaderDirectory as NSString)
-                .appendingPathComponent(shader.rawValue)
-            // Escape single quotes in path for FFmpeg
-            let escapedPath = shaderPath.replacingOccurrences(of: "'", with: "'\\''")
+        if !shaders.isEmpty {
+            // Phase 1: Group shaders into stages split at each upscaler boundary.
+            // Each stage becomes ONE libplacebo invocation with a combined shader.
+            var stages: [(shaders: [Anime4KShader], scale: Bool)] = []
+            var currentGroup: [Anime4KShader] = []
+            var currentScale = 1
 
-            if shader.isUpscaler {
-                // Only apply upscaler if we haven't reached target scale
-                if currentScale < resolution.scaleFactor {
+            for shader in shaders {
+                if shader.isUpscaler && currentScale < resolution.scaleFactor {
+                    // Flush current non-upscaler group first
+                    if !currentGroup.isEmpty {
+                        stages.append((shaders: currentGroup, scale: false))
+                        currentGroup = []
+                    }
+                    stages.append((shaders: [shader], scale: true))
+                    currentScale *= 2
+                } else if !shader.isUpscaler {
+                    currentGroup.append(shader)
+                }
+                // Skip upscaler if target scale already reached
+            }
+            if !currentGroup.isEmpty {
+                stages.append((shaders: currentGroup, scale: false))
+            }
+
+            // Phase 2: For each stage, concatenate shader files and build ONE
+            // libplacebo filter invocation per stage.
+            filterComponents.append("hwupload")
+
+            for stage in stages {
+                let combinedPath = ShaderCombiner.combinedShaderPath(
+                    shaders: stage.shaders, directory: shaderDirectory)
+                let escapedPath = combinedPath.replacingOccurrences(of: "'", with: "'\\''")
+
+                if stage.scale {
                     filterComponents.append(
                         "libplacebo=w=iw*2:h=ih*2:custom_shader_path='\(escapedPath)'"
                     )
-                    currentScale *= 2
+                } else {
+                    filterComponents.append(
+                        "libplacebo=custom_shader_path='\(escapedPath)'"
+                    )
                 }
-                // Skip upscaler if target scale already reached
-            } else {
-                filterComponents.append(
-                    "libplacebo=custom_shader_path='\(escapedPath)'"
-                )
             }
-        }
 
-        if !filterComponents.isEmpty {
-            // Force Vulkan hardware upload/download to bypass OpenGL issues
-            filterComponents.insert("hwupload", at: 0)
             filterComponents.append("hwdownload")
         }
 
-        // Append pixel format conversion as the final filter
         filterComponents.append("format=\(codec.pixelFormat)")
-
         return filterComponents.joined(separator: ",")
     }
 }

@@ -283,8 +283,14 @@ final class ProcessingEngine {
                             job.progress = 1.0
                             job.appendLog("✅ Processing completed successfully.")
                         } else if proc.terminationReason == .uncaughtSignal {
-                            job.state = .cancelled
-                            job.appendLog("🛑 Processing cancelled by user.")
+                            if self?.cancellationRequested == true {
+                                job.state = .cancelled
+                                job.appendLog("🛑 Processing cancelled by user.")
+                            } else {
+                                job.state = .failed
+                                job.errorMessage = "FFmpeg crashed (signal \(proc.terminationStatus))"
+                                job.appendLog("❌ FFmpeg crashed with signal \(proc.terminationStatus). This usually indicates a GPU driver error or incompatible shader.")
+                            }
                         } else {
                             job.state = .failed
                             job.errorMessage = "FFmpeg exited with code \(proc.terminationStatus)"
@@ -412,21 +418,29 @@ final class ProcessingEngine {
         job.startDate = Date()
 
         job.appendLog("Starting Stage 1/3: Decoding video to frames...")
-        let decodeArgs = ["-y", "-i", job.file.url.path, "-qscale:v", "1", framesDir.appendingPathComponent("%08d.png").path]
+        let decodeArgs = ["-y", "-progress", "pipe:1", "-i", job.file.url.path, "-qscale:v", "1", framesDir.appendingPathComponent("%08d.png").path]
         let decodeSuccess = await runSubprocess(executableURL: ffmpegURL, arguments: decodeArgs, job: job, step: 1)
         if !decodeSuccess || cancellationRequested { return }
 
         job.appendLog("Starting Stage 2/3: Upscaling frames via Real-ESRGAN...")
         let modelName = job.configuration.mode.modelName ?? "realesr-animevideov3"
-        let upscaleArgs = ["-i", framesDir.path, "-o", upscaledDir.path, "-n", modelName, "-s", "4", "-j", "1:2:2", "-t", "0"]
+        let scaleStr = String(job.configuration.resolution.scaleFactor)
+        let upscaleArgs = ["-i", framesDir.path, "-o", upscaledDir.path, "-n", modelName, "-s", scaleStr, "-j", "1:2:2", "-t", "256"]
         let upscaleSuccess = await runSubprocess(executableURL: realesrganURL, arguments: upscaleArgs, job: job, step: 2)
         if !upscaleSuccess || cancellationRequested { return }
 
         job.appendLog("Starting Stage 3/3: Re-encoding upscaled frames to video...")
-        let fpsString = "23.976"
+        let asset = AVURLAsset(url: job.file.url)
+        let nominalFrameRate: Float
+        if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
+            nominalFrameRate = (try? await videoTrack.load(.nominalFrameRate)) ?? 23.976
+        } else {
+            nominalFrameRate = 23.976
+        }
+        let fpsString = String(format: "%.3f", nominalFrameRate)
         let outputURL = job.outputURL!
         let encodeArgs = [
-            "-y", "-r", fpsString, "-i", upscaledDir.appendingPathComponent("%08d.png").path,
+            "-y", "-progress", "pipe:1", "-r", fpsString, "-i", upscaledDir.appendingPathComponent("%08d.png").path,
             "-i", job.file.url.path,
             "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
             "-c:a", "copy", "-c:s", "copy",
