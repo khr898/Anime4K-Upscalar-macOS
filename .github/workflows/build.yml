@@ -196,9 +196,11 @@ jobs:
           - arch: x64
             qt_arch: win64_msvc2019_64
             cmake_arch: -A x64
+            msbuild_platform: x64
           - arch: arm64
             qt_arch: win64_msvc2019_arm64
             cmake_arch: -A ARM64
+            msbuild_platform: ARM64
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -233,35 +235,57 @@ jobs:
         echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
         echo "VERSION=${RAW_TAG#v}" >> "$GITHUB_ENV"
 
-    - name: Configure CMake
-      run: cmake -B build-${{ matrix.arch }} -S windows ${{ matrix.cmake_arch }} -DCMAKE_BUILD_TYPE=Release
+    - name: Build a4k_core static library
+      run: |
+        cmake -B build-${{ matrix.arch }} -S windows ${{ matrix.cmake_arch }} -DCMAKE_BUILD_TYPE=Release
+        cmake --build build-${{ matrix.arch }} --config Release
 
-    - name: Build
-      run: cmake --build build-${{ matrix.arch }} --config Release
+    - name: Restore NuGet packages
+      shell: pwsh
+      run: |
+        msbuild windows\a4k_app\a4k_app.vcxproj /t:Restore /p:Platform=${{ matrix.msbuild_platform }}
+
+    - name: Build WinUI 3 app
+      shell: pwsh
+      run: |
+        # Qt6_DIR = .../6.5.3/msvc2019_64/lib/cmake/Qt6 — strip 3 levels to get Qt root
+        $qtRoot = Split-Path -Parent (Split-Path -Parent (Split-Path -Parent $env:Qt6_DIR))
+        $coreLibDir = "${{ github.workspace }}\build-${{ matrix.arch }}\Release"
+        msbuild windows\a4k_app\a4k_app.vcxproj `
+          /p:Configuration=Release `
+          /p:Platform=${{ matrix.msbuild_platform }} `
+          /p:QtInstallDir=$qtRoot `
+          /p:A4kCoreLibDir=$coreLibDir `
+          /m
 
     - name: Package Release
       shell: pwsh
       run: |
-        # Create staging folders
-        New-Item -ItemType Directory -Path build-${{ matrix.arch }}\Release\dist -Force
-        New-Item -ItemType Directory -Path build-${{ matrix.arch }}\Release\dist\vendor\${{ matrix.arch }} -Force
-        
-        # Copy binary
-        Copy-Item build-${{ matrix.arch }}\Release\Anime4KUpscaler.exe build-${{ matrix.arch }}\Release\dist\
-        
+        $exeDir = "windows\a4k_app\${{ matrix.msbuild_platform }}\Release"
+        $distDir = "build-${{ matrix.arch }}\Release\dist"
+
+        New-Item -ItemType Directory -Path $distDir -Force
+        New-Item -ItemType Directory -Path "$distDir\vendor\${{ matrix.arch }}" -Force
+
+        # Copy WinUI 3 binary
+        Copy-Item "$exeDir\Anime4KUpscaler.exe" $distDir\
+
         # Deploy Qt runtimes
-        windeployqt --no-compiler-runtime --dir build-${{ matrix.arch }}\Release\dist build-${{ matrix.arch }}\Release\Anime4KUpscaler.exe
-        
+        windeployqt --no-compiler-runtime --dir $distDir "$exeDir\Anime4KUpscaler.exe"
+
+        # Copy Windows App SDK self-contained DLLs (built next to exe)
+        Get-ChildItem "$exeDir\*.dll" | Copy-Item -Destination $distDir -Force
+
         # Deploy shaders
-        Copy-Item -Path shaders -Destination build-${{ matrix.arch }}\Release\dist\shaders -Recurse -Force
-        
+        Copy-Item -Path shaders -Destination "$distDir\shaders" -Recurse -Force
+
         # Deploy FFmpeg dependencies
-        Copy-Item -Path windows\vendor\${{ matrix.arch }}\ffmpeg.exe -Destination build-${{ matrix.arch }}\Release\dist\vendor\${{ matrix.arch }}\
-        Copy-Item -Path windows\vendor\${{ matrix.arch }}\ffprobe.exe -Destination build-${{ matrix.arch }}\Release\dist\vendor\${{ matrix.arch }}\
-        
-        # Create Zip Archive
+        Copy-Item -Path "windows\vendor\${{ matrix.arch }}\ffmpeg.exe"  -Destination "$distDir\vendor\${{ matrix.arch }}\"
+        Copy-Item -Path "windows\vendor\${{ matrix.arch }}\ffprobe.exe" -Destination "$distDir\vendor\${{ matrix.arch }}\"
+
+        # Create zip
         New-Item -ItemType Directory -Path build\pkg -Force
-        Compress-Archive -Path build-${{ matrix.arch }}\Release\dist\* -DestinationPath build\pkg\Anime4K_Upscaler_${{ env.RAW_TAG }}_win_${{ matrix.arch }}.zip -Force
+        Compress-Archive -Path "$distDir\*" -DestinationPath "build\pkg\Anime4K_Upscaler_${{ env.RAW_TAG }}_win_${{ matrix.arch }}.zip" -Force
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
