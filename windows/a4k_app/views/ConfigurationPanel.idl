@@ -1,0 +1,8 @@
+namespace Anime4KUpscaler.views
+{
+    [default_interface]
+    runtimeclass ConfigurationPanel : Microsoft.UI.Xaml.Controls.UserControl
+    {
+        ConfigurationPanel();
+    }
+}

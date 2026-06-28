@@ -3,7 +3,6 @@
 #include "../utils/DurationProbe.h"
 #include "../utils/SleepPreventer.h"
 
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QDir>
 #include <QLocale>
@@ -19,6 +18,10 @@ StreamOptimizeViewModel::StreamOptimizeViewModel(QObject* parent) : QObject(pare
 StreamOptimizeViewModel::~StreamOptimizeViewModel() {
     cancelProcessing();
     qDeleteAll(m_jobs);
+}
+
+void StreamOptimizeViewModel::setPickerService(IPickerService* picker) {
+    m_picker = picker;
 }
 
 QString StreamOptimizeViewModel::sourceDirectory() const {
@@ -39,10 +42,14 @@ QString StreamOptimizeViewModel::sourceDisplayName() const {
 }
 
 void StreamOptimizeViewModel::selectSourceDirectory() {
-    QString dir = QFileDialog::getExistingDirectory(nullptr, "Select Source Directory", m_sourceDirectory);
-    if (!dir.isEmpty()) {
-        setSourceDirectory(dir);
-    }
+    if (!m_picker) return;
+    m_picker->pickDirectory(
+        "Select Source Directory",
+        m_sourceDirectory,
+        [this](QString dir) {
+            if (!dir.isEmpty())
+                setSourceDirectory(dir);
+        });
 }
 
 QString StreamOptimizeViewModel::destinationDirectory() const {
@@ -62,10 +69,14 @@ QString StreamOptimizeViewModel::destinationDisplayName() const {
 }
 
 void StreamOptimizeViewModel::selectDestinationDirectory() {
-    QString dir = QFileDialog::getExistingDirectory(nullptr, "Select Destination Directory", m_destinationDirectory);
-    if (!dir.isEmpty()) {
-        setDestinationDirectory(dir);
-    }
+    if (!m_picker) return;
+    m_picker->pickDirectory(
+        "Select Destination Directory",
+        m_destinationDirectory,
+        [this](QString dir) {
+            if (!dir.isEmpty())
+                setDestinationDirectory(dir);
+        });
 }
 
 const QVector<VideoFile>& StreamOptimizeViewModel::files() const {

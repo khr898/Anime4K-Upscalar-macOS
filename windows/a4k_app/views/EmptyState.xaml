@@ -1,0 +1,39 @@
+<UserControl
+    x:Class="Anime4KUpscaler.views.EmptyState"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    AllowDrop="True"
+    DragOver="OnDragOver"
+    Drop="OnDrop">
+
+    <Grid Background="Transparent">
+        <StackPanel HorizontalAlignment="Center"
+                    VerticalAlignment="Center"
+                    Spacing="16"
+                    MaxWidth="320">
+
+            <FontIcon FontFamily="{StaticResource SymbolThemeFontFamily}"
+                      Glyph="&#xE8F1;"
+                      FontSize="48"
+                      Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                      HorizontalAlignment="Center"/>
+
+            <TextBlock Text="No Video Files Selected"
+                       Style="{ThemeResource SubtitleTextBlockStyle}"
+                       HorizontalAlignment="Center"/>
+
+            <TextBlock Text="Drag &amp; drop video files here, or click Add Files to start upscaling."
+                       Style="{ThemeResource BodyTextBlockStyle}"
+                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                       TextWrapping="Wrap"
+                       TextAlignment="Center"
+                       HorizontalAlignment="Center"/>
+
+            <Button x:Name="AddButton"
+                    Content="Add Files..."
+                    Style="{ThemeResource AccentButtonStyle}"
+                    HorizontalAlignment="Center"
+                    Click="OnAddClicked"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

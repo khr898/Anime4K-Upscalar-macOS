@@ -1,0 +1,66 @@
+<UserControl
+    x:Class="Anime4KUpscaler.views.ProcessingPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
+
+    <Grid RowSpacing="8">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Summary banner -->
+        <Border Grid.Row="0"
+                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="16,12">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" Spacing="2">
+                    <TextBlock x:Name="SummaryLabel"
+                               Text="Processing..."
+                               Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                    <TextBlock x:Name="StatsLabel"
+                               Style="{ThemeResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+                <TextBlock x:Name="DurationLabel"
+                           Grid.Column="1"
+                           Style="{ThemeResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                           VerticalAlignment="Center"/>
+            </Grid>
+        </Border>
+
+        <!-- Overall progress -->
+        <ProgressBar x:Name="OverallProgress"
+                     Grid.Row="1"
+                     Minimum="0" Maximum="100"
+                     Value="0"/>
+
+        <!-- Job list -->
+        <ScrollViewer Grid.Row="2" VerticalScrollBarVisibility="Auto">
+            <StackPanel x:Name="JobList" Spacing="4"/>
+        </ScrollViewer>
+
+        <!-- Action buttons -->
+        <StackPanel Grid.Row="3" Orientation="Horizontal" Spacing="8" HorizontalAlignment="Right">
+            <Button x:Name="ReturnBtn"
+                    Content="← Back to Configuration"
+                    Click="OnReturnClicked"/>
+            <Button x:Name="CancelBtn"
+                    Content="Cancel"
+                    Style="{ThemeResource AccentButtonStyle}"
+                    Click="OnCancelClicked"/>
+        </StackPanel>
+    </Grid>
+</UserControl>

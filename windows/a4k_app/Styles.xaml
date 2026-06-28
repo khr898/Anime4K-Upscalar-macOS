@@ -1,0 +1,40 @@
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- Card style — replaces QGroupBox "card" look -->
+    <Style x:Key="CardBorderStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+        <Setter Property="BorderThickness" Value="1"/>
+        <Setter Property="CornerRadius" Value="8"/>
+        <Setter Property="Padding" Value="12"/>
+    </Style>
+
+    <!-- Danger button — cancel / destructive actions -->
+    <SolidColorBrush x:Key="DangerButtonBackgroundBrush" Color="#C42B1C"/>
+    <SolidColorBrush x:Key="DangerButtonForegroundBrush" Color="White"/>
+    <Style x:Key="DangerButtonStyle" TargetType="Button">
+        <Setter Property="Background" Value="{StaticResource DangerButtonBackgroundBrush}"/>
+        <Setter Property="Foreground" Value="{StaticResource DangerButtonForegroundBrush}"/>
+        <Setter Property="CornerRadius" Value="4"/>
+    </Style>
+
+    <!-- Section header TextBlock -->
+    <Style x:Key="SectionHeaderStyle" TargetType="TextBlock">
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="FontSize" Value="13"/>
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}"/>
+        <Setter Property="Margin" Value="0,0,0,6"/>
+    </Style>
+
+    <!-- Secondary label -->
+    <Style x:Key="SecondaryLabelStyle" TargetType="TextBlock">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+        <Setter Property="FontSize" Value="12"/>
+    </Style>
+
+    <Thickness x:Key="PanelMargin">10</Thickness>
+    <Thickness x:Key="ItemSpacing">0,0,0,8</Thickness>
+
+</ResourceDictionary>

@@ -1,4 +1,5 @@
 #pragma once
+#include "IPickerService.h"
 
 #include <QObject>
 #include <QVector>
@@ -43,6 +44,9 @@ public:
     QUuid selectedFileID() const;
     void setSelectedFileID(const QUuid& id);
     VideoFile* selectedFile();
+
+    // Picker injection
+    void setPickerService(IPickerService* picker);
 
     // File Management
     void addFiles();
@@ -162,4 +166,5 @@ private:
     QString m_qualityTuneErrorText;
 
     ProcessingEngine* m_engine = nullptr;
+    IPickerService* m_picker = nullptr;
 };

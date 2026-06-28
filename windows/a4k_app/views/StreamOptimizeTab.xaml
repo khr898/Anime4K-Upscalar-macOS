@@ -1,0 +1,250 @@
+<UserControl
+    x:Class="Anime4KUpscaler.views.StreamOptimizeTab"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
+
+    <Grid>
+
+        <!-- Config area -->
+        <Grid x:Name="ConfigArea">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <ScrollViewer Grid.Row="0" VerticalScrollBarVisibility="Auto">
+                <StackPanel Spacing="16" Padding="16,8,16,8">
+
+                    <!-- Source Directory -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Source Directory"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <Grid ColumnSpacing="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="SourceDirLabel"
+                                       Grid.Column="0"
+                                       Text="Not selected"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Button Grid.Column="1" Content="Browse..."
+                                    Click="OnBrowseSource"/>
+                        </Grid>
+                        <TextBlock x:Name="FileCountLabel"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"
+                                   Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                    </StackPanel>
+
+                    <!-- Destination Directory -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Destination Directory"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <Grid ColumnSpacing="4">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="DestDirLabel"
+                                       Grid.Column="0"
+                                       Text="Not selected"
+                                       VerticalAlignment="Center"
+                                       TextTrimming="CharacterEllipsis"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                            <Button Grid.Column="1" Content="Browse..."
+                                    Click="OnBrowseDest"/>
+                        </Grid>
+                    </StackPanel>
+
+                    <!-- Encoder -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Encoder"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <ComboBox x:Name="EncoderCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnEncoderChanged">
+                            <ComboBoxItem Content="HEVC (NVIDIA NVENC)"/>
+                            <ComboBoxItem Content="H.264 (NVIDIA NVENC)"/>
+                            <ComboBoxItem Content="HEVC (AMD AMF)"/>
+                            <ComboBoxItem Content="H.264 (AMD AMF)"/>
+                            <ComboBoxItem Content="HEVC (Intel QSV)"/>
+                            <ComboBoxItem Content="H.264 (Intel QSV)"/>
+                            <ComboBoxItem Content="AV1 (SVT Software)"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <!-- Quality -->
+                    <StackPanel Spacing="4">
+                        <StackPanel Orientation="Horizontal" Spacing="6">
+                            <TextBlock Text="Quality"
+                                       Style="{ThemeResource CaptionTextBlockStyle}"/>
+                            <TextBlock x:Name="QualityValueLabel"
+                                       Style="{ThemeResource CaptionTextBlockStyle}"
+                                       Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                        </StackPanel>
+                        <Slider x:Name="QualitySlider"
+                                Minimum="0" Maximum="100"
+                                ValueChanged="OnQualityChanged"/>
+                    </StackPanel>
+
+                    <!-- Profile -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Profile"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <ComboBox x:Name="ProfileCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnProfileChanged">
+                            <ComboBoxItem Content="Main10 (10-bit)"/>
+                            <ComboBoxItem Content="Main (8-bit)"/>
+                            <ComboBoxItem Content="High"/>
+                            <ComboBoxItem Content="Baseline"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <!-- Pixel Format -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Pixel Format"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <ComboBox x:Name="PixelFormatCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnPixelFormatChanged">
+                            <ComboBoxItem Content="P010LE (10-bit)"/>
+                            <ComboBoxItem Content="NV12 (8-bit)"/>
+                            <ComboBoxItem Content="YUV420P (8-bit planar)"/>
+                            <ComboBoxItem Content="YUV420P10LE (10-bit planar)"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <!-- Audio Mode -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Audio"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <ComboBox x:Name="AudioCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnAudioModeChanged">
+                            <ComboBoxItem Content="Copy (passthrough)"/>
+                            <ComboBoxItem Content="AAC Transcode"/>
+                            <ComboBoxItem Content="AAC 128 kbps"/>
+                            <ComboBoxItem Content="AAC 192 kbps"/>
+                            <ComboBoxItem Content="AAC 256 kbps"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <!-- Subtitle Mode -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Subtitles"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <ComboBox x:Name="SubtitleCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnSubtitleModeChanged">
+                            <ComboBoxItem Content="MOV Text (convert for streaming)"/>
+                            <ComboBoxItem Content="Copy (passthrough)"/>
+                            <ComboBoxItem Content="Strip (remove all)"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <!-- Keyframe Interval -->
+                    <StackPanel Spacing="4">
+                        <TextBlock Text="Keyframe Interval"
+                                   Style="{ThemeResource CaptionTextBlockStyle}"/>
+                        <ComboBox x:Name="KeyframeCombo"
+                                  HorizontalAlignment="Stretch"
+                                  SelectionChanged="OnKeyframeChanged">
+                            <ComboBoxItem Content="1 second"/>
+                            <ComboBoxItem Content="2 seconds"/>
+                            <ComboBoxItem Content="3 seconds"/>
+                            <ComboBoxItem Content="5 seconds"/>
+                            <ComboBoxItem Content="10 seconds"/>
+                        </ComboBox>
+                    </StackPanel>
+
+                    <!-- Faststart -->
+                    <CheckBox x:Name="FaststartCheck"
+                              Content="MP4 Fast Start (moov atom at front)"
+                              Click="OnFaststartChanged"/>
+
+                    <!-- SW Fallback -->
+                    <CheckBox x:Name="SWFallbackCheck"
+                              Content="Allow Software Encoder Fallback"
+                              Click="OnSWFallbackChanged"/>
+
+                </StackPanel>
+            </ScrollViewer>
+
+            <!-- Footer -->
+            <Grid Grid.Row="1" Margin="16,8,16,8" ColumnSpacing="8">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <StackPanel Grid.Column="0" VerticalAlignment="Center" Spacing="2">
+                    <TextBlock x:Name="SummaryLabel"
+                               Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                    <TextBlock x:Name="FileSizeLabel"
+                               Style="{ThemeResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+                <Button x:Name="StartButton"
+                        Grid.Column="1"
+                        Content="Start Optimization"
+                        Style="{ThemeResource AccentButtonStyle}"
+                        Click="OnStartClicked"/>
+            </Grid>
+        </Grid>
+
+        <!-- Processing overlay -->
+        <Grid x:Name="ProcessingArea" Visibility="Collapsed"
+              Padding="16,4,16,8">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Summary banner -->
+            <Border Grid.Row="0"
+                    Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                    CornerRadius="4" Padding="12,8" Margin="0,0,0,8">
+                <StackPanel>
+                    <TextBlock x:Name="ProcSummaryLabel"
+                               Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                    <TextBlock x:Name="ProcStatsLabel"
+                               Style="{ThemeResource CaptionTextBlockStyle}"
+                               Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+                </StackPanel>
+            </Border>
+
+            <!-- Overall progress bar -->
+            <ProgressBar x:Name="OverallProgressBar"
+                         Grid.Row="1"
+                         Minimum="0" Maximum="100"
+                         Margin="0,0,0,8"/>
+
+            <!-- Per-job list -->
+            <ScrollViewer Grid.Row="2">
+                <StackPanel x:Name="StreamJobList" Spacing="4"/>
+            </ScrollViewer>
+
+            <!-- Action buttons -->
+            <StackPanel Grid.Row="3"
+                        Orientation="Horizontal" Spacing="8"
+                        HorizontalAlignment="Right"
+                        Margin="0,8,0,0">
+                <Button x:Name="ReturnBtn"
+                        Content="Return to Configuration"
+                        IsEnabled="False"
+                        Click="OnReturnClicked"/>
+                <Button x:Name="CancelBtn"
+                        Content="Cancel"
+                        Style="{ThemeResource AccentButtonStyle}"
+                        Click="OnCancelClicked"/>
+            </StackPanel>
+        </Grid>
+
+    </Grid>
+</UserControl>

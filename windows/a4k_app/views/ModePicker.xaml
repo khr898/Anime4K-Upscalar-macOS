@@ -1,0 +1,35 @@
+<UserControl
+    x:Class="Anime4KUpscaler.views.ModePicker"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
+
+    <StackPanel Spacing="8">
+        <TextBlock Text="Processing Mode"
+                   Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+
+        <!-- Category selector -->
+        <StackPanel Orientation="Horizontal" Spacing="4">
+            <RadioButton x:Name="HQBtn"     Content="Anime4K (HQ)"    GroupName="Cat" Tag="0" Checked="OnCategoryChecked" IsChecked="True"/>
+            <RadioButton x:Name="FastBtn"   Content="Anime4K (Fast)"  GroupName="Cat" Tag="1" Checked="OnCategoryChecked"/>
+            <RadioButton x:Name="NoUpBtn"   Content="No Upscale"      GroupName="Cat" Tag="2" Checked="OnCategoryChecked"/>
+            <RadioButton x:Name="NeuralBtn" Content="Neural SR"       GroupName="Cat" Tag="3" Checked="OnCategoryChecked"/>
+            <RadioButton x:Name="SpecialBtn" Content="⚡ Special"     GroupName="Cat" Tag="4" Checked="OnCategoryChecked"/>
+        </StackPanel>
+
+        <!-- Mode list -->
+        <ListView x:Name="ModeList"
+                  SelectionChanged="OnModeSelected"
+                  SelectionMode="Single"
+                  MinHeight="150">
+            <ListView.ItemTemplate>
+                <DataTemplate>
+                    <TextBlock Text="{Binding}"
+                               Style="{ThemeResource BodyTextBlockStyle}"
+                               Margin="4,2"/>
+                </DataTemplate>
+            </ListView.ItemTemplate>
+        </ListView>
+    </StackPanel>
+</UserControl>

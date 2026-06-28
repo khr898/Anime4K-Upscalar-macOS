@@ -1,4 +1,5 @@
 #pragma once
+#include "IPickerService.h"
 
 #include <QObject>
 #include <QVector>
@@ -22,6 +23,9 @@ public:
     QUuid selectedFileID() const;
     void setSelectedFileID(const QUuid& id);
     VideoFile* selectedFile();
+
+    // Picker injection
+    void setPickerService(IPickerService* picker);
 
     // File Management
     void addFiles();
@@ -125,4 +129,5 @@ private:
     // Speed calculation
     QDateTime m_firstMetricWallDate;
     double m_firstMetricTimeSeconds = -1.0;
+    IPickerService* m_picker = nullptr;
 };

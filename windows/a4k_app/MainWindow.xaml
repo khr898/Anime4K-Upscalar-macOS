@@ -1,0 +1,71 @@
+<Window
+    x:Class="Anime4KUpscaler.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="using:Anime4KUpscaler"
+    xmlns:views="using:Anime4KUpscaler.views"
+    Title="Anime4K Upscaler &amp; Compressor">
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+        </Grid.RowDefinitions>
+
+        <!-- Custom drag region for extended title bar -->
+        <Grid x:Name="AppTitleBar" Grid.Row="0" Height="32">
+            <TextBlock Text="Anime4K Upscaler &amp; Compressor"
+                       VerticalAlignment="Center"
+                       Margin="12,0,0,0"
+                       Style="{ThemeResource CaptionTextBlockStyle}"/>
+        </Grid>
+
+        <!-- Dependency alert InfoBar -->
+        <InfoBar x:Name="DependencyInfoBar"
+                 Grid.Row="1"
+                 Severity="Warning"
+                 IsOpen="False"
+                 IsClosable="True"
+                 Title="Missing Dependencies"
+                 Margin="8,4,8,0"
+                 Closed="OnDependencyInfoBarClosed"/>
+
+        <!-- Main content: TabView -->
+        <TabView x:Name="MainTabView"
+                 Grid.Row="2"
+                 IsAddTabButtonVisible="False"
+                 TabWidthMode="Equal"
+                 SelectionChanged="OnTabSelectionChanged">
+
+            <TabViewItem Header="Upscale" IsClosable="False">
+                <TabViewItem.IconSource>
+                    <FontIconSource Glyph="&#xE70F;"/>
+                </TabViewItem.IconSource>
+                <views:UpscaleTab x:Name="UpscaleTabContent"/>
+            </TabViewItem>
+
+            <TabViewItem Header="Compress" IsClosable="False">
+                <TabViewItem.IconSource>
+                    <FontIconSource Glyph="&#xE8B7;"/>
+                </TabViewItem.IconSource>
+                <views:CompressTab x:Name="CompressTabContent"/>
+            </TabViewItem>
+
+            <TabViewItem Header="Stream Optimize" IsClosable="False">
+                <TabViewItem.IconSource>
+                    <FontIconSource Glyph="&#xE774;"/>
+                </TabViewItem.IconSource>
+                <views:StreamOptimizeTab x:Name="StreamOptimizeTabContent"/>
+            </TabViewItem>
+
+            <TabViewItem Header="Quality Tune" IsClosable="False">
+                <TabViewItem.IconSource>
+                    <FontIconSource Glyph="&#xE713;"/>
+                </TabViewItem.IconSource>
+                <views:QualityTuneTab x:Name="QualityTuneTabContent"/>
+            </TabViewItem>
+
+        </TabView>
+    </Grid>
+</Window>

@@ -1,0 +1,102 @@
+<UserControl
+    x:Class="Anime4KUpscaler.views.ConfigurationPanel"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    Loaded="OnLoaded"
+    Unloaded="OnUnloaded">
+
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Spacing="12" Padding="0,0,8,0">
+
+            <!-- Resolution -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Target Resolution" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <RadioButton x:Name="ResOriginal" Content="Original (1x)" GroupName="Res" Tag="0" Checked="OnResolutionChecked" IsChecked="True"/>
+                    <RadioButton x:Name="ResDouble"   Content="2x Upscale"    GroupName="Res" Tag="1" Checked="OnResolutionChecked"/>
+                    <RadioButton x:Name="ResQuad"     Content="4x Upscale"    GroupName="Res" Tag="2" Checked="OnResolutionChecked"/>
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Codec -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Output Codec" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <ComboBox x:Name="CodecCombo" HorizontalAlignment="Stretch" SelectionChanged="OnCodecChanged">
+                    <ComboBoxItem Content="HEVC (NVIDIA RTX)"/>
+                    <ComboBoxItem Content="HEVC (AMD)"/>
+                    <ComboBoxItem Content="HEVC (Intel)"/>
+                    <ComboBoxItem Content="H.264 (NVIDIA RTX)"/>
+                    <ComboBoxItem Content="H.264 (AMD)"/>
+                    <ComboBoxItem Content="H.264 (Intel)"/>
+                    <ComboBoxItem Content="AV1 (Software)"/>
+                </ComboBox>
+            </StackPanel>
+
+            <!-- Compression Preset -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Compression Preset" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <ComboBox x:Name="PresetCombo" HorizontalAlignment="Stretch" SelectionChanged="OnPresetChanged">
+                    <ComboBoxItem Content="Visually Lossless"/>
+                    <ComboBoxItem Content="Balanced"/>
+                    <ComboBoxItem Content="Custom Quality"/>
+                    <ComboBoxItem Content="Custom Bitrate"/>
+                </ComboBox>
+            </StackPanel>
+
+            <!-- Quality Slider (visible when CustomQuality) -->
+            <StackPanel x:Name="QualityContainer" Spacing="4">
+                <TextBlock Text="Quality (CRF/Q)" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <Slider x:Name="QualitySlider" Minimum="0" Maximum="100"
+                        StepFrequency="1" ValueChanged="OnQualityChanged"/>
+                <TextBlock x:Name="QualityValueLabel"
+                           Style="{ThemeResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- Bitrate Slider (visible when FixedBitrate) -->
+            <StackPanel x:Name="BitrateContainer" Spacing="4">
+                <TextBlock Text="Bitrate (Mbps)" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <Slider x:Name="BitrateSlider" Minimum="1" Maximum="150"
+                        StepFrequency="1" ValueChanged="OnBitrateChanged"/>
+                <TextBlock x:Name="BitrateValueLabel"
+                           Style="{ThemeResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- SVT-AV1 Speed Preset (visible when AV1 codec) -->
+            <StackPanel x:Name="SvtContainer" Spacing="4">
+                <TextBlock Text="AV1 Speed Preset" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <Slider x:Name="SvtSlider" Minimum="0" Maximum="13"
+                        StepFrequency="1" ValueChanged="OnSvtChanged"/>
+                <TextBlock x:Name="SvtValueLabel"
+                           Style="{ThemeResource CaptionTextBlockStyle}"
+                           Foreground="{ThemeResource TextFillColorSecondaryBrush}"/>
+            </StackPanel>
+
+            <!-- Long GOP -->
+            <CheckBox x:Name="LongGOPCheck" Content="Enable Long GOP" Click="OnLongGOPChanged"/>
+
+            <!-- Output Directory -->
+            <StackPanel Spacing="4">
+                <TextBlock Text="Output Directory" Style="{ThemeResource BodyStrongTextBlockStyle}"/>
+                <Grid ColumnSpacing="6">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBlock x:Name="OutputDirLabel"
+                               Grid.Column="0"
+                               Text="(same as source)"
+                               Style="{ThemeResource BodyTextBlockStyle}"
+                               TextTrimming="CharacterEllipsis"
+                               VerticalAlignment="Center"/>
+                    <Button x:Name="BrowseBtn"
+                            Grid.Column="1"
+                            Content="Browse..."
+                            Click="OnBrowseOutput"/>
+                </Grid>
+            </StackPanel>
+
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

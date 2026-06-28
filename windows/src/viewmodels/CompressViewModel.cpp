@@ -3,7 +3,6 @@
 #include "../utils/DurationProbe.h"
 #include "../utils/SleepPreventer.h"
 
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QDir>
 #include <QLocale>
@@ -16,6 +15,10 @@ CompressViewModel::CompressViewModel(QObject* parent) : QObject(parent) {
 CompressViewModel::~CompressViewModel() {
     cancelProcessing();
     qDeleteAll(m_jobs);
+}
+
+void CompressViewModel::setPickerService(IPickerService* picker) {
+    m_picker = picker;
 }
 
 const QVector<VideoFile>& CompressViewModel::files() const {
@@ -41,15 +44,14 @@ VideoFile* CompressViewModel::selectedFile() {
 }
 
 void CompressViewModel::addFiles() {
-    QStringList paths = QFileDialog::getOpenFileNames(
-        nullptr,
+    if (!m_picker) return;
+    m_picker->pickFiles(
         "Select Video Files",
-        QString(),
-        "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.flv *.ts)"
-    );
-    if (!paths.isEmpty()) {
-        addFilesFromDrop(paths);
-    }
+        "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.flv *.ts)",
+        [this](QStringList paths) {
+            if (!paths.isEmpty())
+                addFilesFromDrop(paths);
+        });
 }
 
 void CompressViewModel::addFilesFromDrop(const QStringList& paths) {
@@ -210,10 +212,14 @@ QString CompressViewModel::outputDirectoryDisplayName() const {
 }
 
 void CompressViewModel::selectOutputDirectory() {
-    QString dir = QFileDialog::getExistingDirectory(nullptr, "Select Output Directory", m_outputDirectory);
-    if (!dir.isEmpty()) {
-        setOutputDirectory(dir);
-    }
+    if (!m_picker) return;
+    m_picker->pickDirectory(
+        "Select Output Directory",
+        m_outputDirectory,
+        [this](QString dir) {
+            if (!dir.isEmpty())
+                setOutputDirectory(dir);
+        });
 }
 
 CompressViewModel::ViewState CompressViewModel::viewState() const {

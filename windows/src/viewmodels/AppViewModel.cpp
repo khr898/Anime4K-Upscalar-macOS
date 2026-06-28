@@ -3,7 +3,6 @@
 #include "../utils/FFmpegLocator.h"
 #include "../utils/DurationProbe.h"
 
-#include <QFileDialog>
 #include <QFileInfo>
 #include <QDir>
 #include <QLocale>
@@ -34,6 +33,10 @@ AppViewModel::AppViewModel(QObject* parent) : QObject(parent) {
 
 AppViewModel::~AppViewModel() {
     qDeleteAll(m_jobs);
+}
+
+void AppViewModel::setPickerService(IPickerService* picker) {
+    m_picker = picker;
 }
 
 // MARK: - Tab state
@@ -76,15 +79,14 @@ VideoFile* AppViewModel::selectedFile() {
 // MARK: - File Management
 
 void AppViewModel::addFiles() {
-    QStringList paths = QFileDialog::getOpenFileNames(
-        nullptr,
+    if (!m_picker) return;
+    m_picker->pickFiles(
         "Select Video Files",
-        QString(),
-        "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.flv *.ts)"
-    );
-    if (!paths.isEmpty()) {
-        addFilesFromDrop(paths);
-    }
+        "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.flv *.ts)",
+        [this](QStringList paths) {
+            if (!paths.isEmpty())
+                addFilesFromDrop(paths);
+        });
 }
 
 void AppViewModel::addFilesFromDrop(const QStringList& paths) {
@@ -262,10 +264,14 @@ QString AppViewModel::outputDirectoryDisplayName() const {
 }
 
 void AppViewModel::selectOutputDirectory() {
-    QString dir = QFileDialog::getExistingDirectory(nullptr, "Select Output Directory", m_outputDirectory);
-    if (!dir.isEmpty()) {
-        setOutputDirectory(dir);
-    }
+    if (!m_picker) return;
+    m_picker->pickDirectory(
+        "Select Output Directory",
+        m_outputDirectory,
+        [this](QString dir) {
+            if (!dir.isEmpty())
+                setOutputDirectory(dir);
+        });
 }
 
 // MARK: - Dependency Validation
@@ -501,16 +507,16 @@ QString AppViewModel::qualityTuneInputPath() const {
 }
 
 void AppViewModel::selectQualityTuneInputFile() {
-    QString path = QFileDialog::getOpenFileName(
-        nullptr,
+    if (!m_picker) return;
+    m_picker->pickFiles(
         "Select Quality Tune Input Video",
-        QString(),
-        "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.flv *.ts)"
-    );
-    if (!path.isEmpty()) {
-        m_qualityTuneInputPath = QDir::cleanPath(path);
-        emit qualityTuneStateChanged();
-    }
+        "Video Files (*.mp4 *.mkv *.mov *.avi *.webm *.flv *.ts)",
+        [this](QStringList paths) {
+            if (!paths.isEmpty()) {
+                m_qualityTuneInputPath = QDir::cleanPath(paths.first());
+                emit qualityTuneStateChanged();
+            }
+        });
 }
 
 VideoCodec AppViewModel::qualityTuneCodec() const {
