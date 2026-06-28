@@ -16,7 +16,7 @@ struct Anime4K_UpscalerApp: App {
                 .environment(compressVM)
                 .environment(streamOptimizeVM)
                 .frame(minWidth: 860, minHeight: 540)
-                .onDisappear {
+                .onReceive(NotificationCenter.default.publisher(for: NSApplication.willTerminateNotification)) { _ in
                     SecurityScopeManager.shared.stopAccessingAll()
                 }
         }

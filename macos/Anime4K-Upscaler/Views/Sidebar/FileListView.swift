@@ -29,7 +29,7 @@ struct FileListView: View {
             // Footer summary
             fileListFooter
         }
-        .background(.background)
+        .background(.regularMaterial)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
         }

@@ -28,6 +28,7 @@ final class ProcessingEngine {
     @ObservationIgnored private var powerAssertionID: IOPMAssertionID = 0
     @ObservationIgnored private var hasPowerAssertion: Bool = false
     @ObservationIgnored private var cancellationRequested: Bool = false
+    @ObservationIgnored private var userInitiatedCancel: Bool = false
     @ObservationIgnored private var activityToken: NSObjectProtocol?
 
     @ObservationIgnored private var lastStderrFlush: Date = .distantPast
@@ -49,6 +50,7 @@ final class ProcessingEngine {
         totalJobs = jobs.count
         currentJobIndex = 0
         cancellationRequested = false
+        userInitiatedCancel = false
 
         acquirePowerAssertion()
         beginAppNapPrevention()
@@ -283,13 +285,13 @@ final class ProcessingEngine {
                             job.progress = 1.0
                             job.appendLog("✅ Processing completed successfully.")
                         } else if proc.terminationReason == .uncaughtSignal {
-                            if self?.cancellationRequested == true {
+                            if self?.userInitiatedCancel == true {
                                 job.state = .cancelled
-                                job.appendLog("🛑 Processing cancelled by user.")
+                                job.appendLog("Processing cancelled by user.")
                             } else {
                                 job.state = .failed
-                                job.errorMessage = "FFmpeg crashed (signal \(proc.terminationStatus))"
-                                job.appendLog("❌ FFmpeg crashed with signal \(proc.terminationStatus). This usually indicates a GPU driver error or incompatible shader.")
+                                job.errorMessage = "ffmpeg terminated (signal \(proc.terminationStatus)). See log; verify bundled dependencies."
+                                job.appendLog("ERROR: ffmpeg terminated by signal \(proc.terminationStatus).")
                             }
                         } else {
                             job.state = .failed
@@ -322,6 +324,7 @@ final class ProcessingEngine {
 
     /// Cancel the currently running job and abort the batch.
     func cancelAll() {
+        userInitiatedCancel = true
         cancellationRequested = true
         if let process = currentProcess, process.isRunning {
             process.terminate()
@@ -330,6 +333,7 @@ final class ProcessingEngine {
 
     /// Cancel a specific job if it is currently running.
     func cancelJob(_ job: ProcessingJob) {
+        userInitiatedCancel = true
         if let process = job.processHandle, process.isRunning {
             process.terminate()
         }
@@ -385,83 +389,88 @@ final class ProcessingEngine {
 
     private func executeSubprocessNeuralJob(_ job: ProcessingJob) async {
         guard let ffmpegURL = FFmpegLocator.ffmpegURL else {
-            job.state = .failed
-            job.errorMessage = "FFmpeg binary not found in app bundle."
-            return
+            job.state = .failed; job.errorMessage = "Bundled ffmpeg missing."; return
         }
-        
-        guard let realesrganURL = Bundle.main.url(forResource: "realesrgan-ncnn-vulkan", withExtension: nil) else {
-            job.state = .failed
-            job.errorMessage = "realesrgan-ncnn-vulkan binary not found in app bundle."
-            return
+        guard let realesrganURL = FFmpegLocator.realesrganURL else {
+            job.state = .failed; job.errorMessage = "realesrgan-ncnn-vulkan missing."; return
         }
+        let modelsDir = FFmpegLocator.realesrganModelsDirectory
 
-        let tempDir = FileManager.default.temporaryDirectory.appendingPathComponent("Anime4KUpscaler_temp_\(job.id.uuidString)")
+        let tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("A4K_NSR_\(job.id.uuidString)")
         let framesDir = tempDir.appendingPathComponent("frames")
         let upscaledDir = tempDir.appendingPathComponent("upscaled")
-
         do {
             try FileManager.default.createDirectory(at: framesDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: upscaledDir, withIntermediateDirectories: true)
-        } catch {
-            job.state = .failed
-            job.errorMessage = "Failed to create temp directories: \(error.localizedDescription)"
-            return
-        }
+        } catch { job.state = .failed; job.errorMessage = "Temp dir failed."; return }
+        defer { try? FileManager.default.removeItem(at: tempDir) }
 
-        defer {
-            try? FileManager.default.removeItem(at: tempDir)
-        }
+        job.state = .running; job.progress = 0.0; job.startDate = Date()
 
-        job.state = .running
-        job.progress = 0.0
-        job.startDate = Date()
+        // Stage 1: decode to PNG.
+        job.appendLog("Stage 1/3: decoding to frames…")
+        let decode = ["-y", "-progress", "pipe:1", "-i", job.file.url.path,
+                      "-pix_fmt", "rgb24", framesDir.appendingPathComponent("%08d.png").path]
+        guard await runSubprocess(executableURL: ffmpegURL, arguments: decode, job: job, step: 1),
+              !cancellationRequested else { return }
 
-        job.appendLog("Starting Stage 1/3: Decoding video to frames...")
-        let decodeArgs = ["-y", "-progress", "pipe:1", "-i", job.file.url.path, "-qscale:v", "1", framesDir.appendingPathComponent("%08d.png").path]
-        let decodeSuccess = await runSubprocess(executableURL: ffmpegURL, arguments: decodeArgs, job: job, step: 1)
-        if !decodeSuccess || cancellationRequested { return }
+        // Stage 2: ncnn upscale. Resolve name + valid scale for the vendored files.
+        let target = job.configuration.resolution.scaleFactor
+        let (mName, mScale) = Self.resolveNcnnModel(job.configuration.mode, target: target, modelsDir: modelsDir)
+        job.appendLog("Stage 2/3: Real-ESRGAN (\(mName), x\(mScale))…")
+        let up = ["-i", framesDir.path, "-o", upscaledDir.path,
+                  "-n", mName, "-m", modelsDir, "-s", String(mScale),
+                  "-j", "1:2:2", "-t", "256", "-f", "png"]
+        guard await runSubprocess(executableURL: realesrganURL, arguments: up, job: job, step: 2,
+                                  workingDirectory: URL(fileURLWithPath: modelsDir).deletingLastPathComponent()),
+              !cancellationRequested else { return }
 
-        job.appendLog("Starting Stage 2/3: Upscaling frames via Real-ESRGAN...")
-        let modelName = job.configuration.mode.modelName ?? "realesr-animevideov3"
-        let scaleStr = String(job.configuration.resolution.scaleFactor)
-        let upscaleArgs = ["-i", framesDir.path, "-o", upscaledDir.path, "-n", modelName, "-s", scaleStr, "-j", "1:2:2", "-t", "256"]
-        let upscaleSuccess = await runSubprocess(executableURL: realesrganURL, arguments: upscaleArgs, job: job, step: 2)
-        if !upscaleSuccess || cancellationRequested { return }
-
-        job.appendLog("Starting Stage 3/3: Re-encoding upscaled frames to video...")
+        // Stage 3: encode, resizing to the user's target if the model scale differs.
         let asset = AVURLAsset(url: job.file.url)
-        let nominalFrameRate: Float
-        if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
-            nominalFrameRate = (try? await videoTrack.load(.nominalFrameRate)) ?? 23.976
-        } else {
-            nominalFrameRate = 23.976
+        let fps: Float = (try? await asset.loadTracks(withMediaType: .video).first?.load(.nominalFrameRate)) ?? 23.976
+        let fpsStr = String(format: "%.3f", fps)
+        var enc = ["-y", "-progress", "pipe:1", "-r", fpsStr,
+                   "-i", upscaledDir.appendingPathComponent("%08d.png").path,
+                   "-i", job.file.url.path,
+                   "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
+                   "-c:a", "copy", "-c:s", "copy",
+                   "-c:v", job.configuration.codec.encoderName,
+                   "-pix_fmt", job.configuration.codec.pixelFormat]
+        if mScale != target {
+            enc += ["-vf", "scale=iw*\(target)/\(mScale):ih*\(target)/\(mScale):flags=lanczos"]
         }
-        let fpsString = String(format: "%.3f", nominalFrameRate)
-        let outputURL = job.outputURL!
-        let encodeArgs = [
-            "-y", "-progress", "pipe:1", "-r", fpsString, "-i", upscaledDir.appendingPathComponent("%08d.png").path,
-            "-i", job.file.url.path,
-            "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
-            "-c:a", "copy", "-c:s", "copy",
-            "-c:v", job.configuration.codec.encoderName,
-            "-pix_fmt", job.configuration.codec.pixelFormat,
-            outputURL.path
-        ]
-        let encodeSuccess = await runSubprocess(executableURL: ffmpegURL, arguments: encodeArgs, job: job, step: 3)
-        
-        if encodeSuccess && !cancellationRequested {
-            job.state = .completed
-            job.progress = 1.0
-            job.appendLog("✅ Neural SR completed successfully.")
+        enc.append(job.outputURL!.path)
+        job.appendLog("Stage 3/3: encoding…")
+        if await runSubprocess(executableURL: ffmpegURL, arguments: enc, job: job, step: 3),
+           !cancellationRequested {
+            job.state = .completed; job.progress = 1.0; job.appendLog("Neural SR completed.")
         }
     }
 
-    private func runSubprocess(executableURL: URL, arguments: [String], job: ProcessingJob, step: Int) async -> Bool {
+    /// Picks a model name + scale that exist among the vendored files.
+    nonisolated static func resolveNcnnModel(_ mode: Anime4KMode, target: Int, modelsDir: String) -> (String, Int) {
+        let fm = FileManager.default
+        func exists(_ n: String) -> Bool { fm.fileExists(atPath: "\(modelsDir)/\(n).param") }
+        switch mode.modelName {
+        case "realesr-animevideov3":
+            let s = [2,3,4].contains(target) ? target : 4
+            let explicit = "realesr-animevideov3-x\(s)"
+            if exists(explicit) { return (explicit, s) }
+            if exists("realesr-animevideov3") { return ("realesr-animevideov3", s) }
+            return (explicit, s)
+        case "realesrgan-x4plus-anime": return ("realesrgan-x4plus-anime", 4)
+        case "realesrgan-x4plus":       return ("realesrgan-x4plus", 4)
+        default:                        return ("realesr-animevideov3-x4", 4)
+        }
+    }
+
+    private func runSubprocess(executableURL: URL, arguments: [String], job: ProcessingJob, step: Int, workingDirectory: URL? = nil) async -> Bool {
         let process = Process()
         process.executableURL = executableURL
         process.arguments = arguments
         process.environment = FFmpegLocator.processEnvironment()
+        if let wd = workingDirectory { process.currentDirectoryURL = wd }
         process.qualityOfService = .userInitiated
 
         let stderrPipe = Pipe()
@@ -554,328 +563,249 @@ final class ProcessingEngine {
         job.state = .running
         job.progress = 0.0
         job.startDate = Date()
-        
-        let isSDRescue = job.configuration.mode == .special_SDRescue
-        var denoisedFramesDir: URL? = nil
-        var tempRoot: URL? = nil
-        
-        if isSDRescue {
-            tempRoot = FileManager.default.temporaryDirectory.appendingPathComponent("Anime4KUpscaler_temp_\(job.id.uuidString)")
-            let framesDir = tempRoot!.appendingPathComponent("denoised_frames")
-            denoisedFramesDir = framesDir
-            
-            do {
-                try FileManager.default.createDirectory(at: framesDir, withIntermediateDirectories: true)
-            } catch {
-                job.state = .failed
-                job.errorMessage = "Failed to create temp directory for denoised frames."
-                return
-            }
-            
-            job.appendLog("Starting Stage 1/2: Pre-processing with Anime4K Restore VL...")
-            
-            guard let ffmpegURL = FFmpegLocator.ffmpegURL else {
-                job.state = .failed
-                job.errorMessage = "FFmpeg binary not found in app bundle."
-                return
-            }
-            
-            let shaderPath = "\(FFmpegLocator.shaderDirectoryPath)/Anime4K_Restore_CNN_VL.glsl"
-            let decodeArgs = [
-                "-init_hw_device", "vulkan=vk:0",
-                "-filter_hw_device", "vk",
-                "-y",
-                "-i", job.file.url.path,
-                "-vf", "hwupload,libplacebo=custom_shader_path=\(shaderPath),hwdownload,format=rgb24",
-                framesDir.appendingPathComponent("%08d.png").path
-            ]
-            
-            let decodeSuccess = await runSubprocess(executableURL: ffmpegURL, arguments: decodeArgs, job: job, step: 1)
-            if !decodeSuccess || cancellationRequested {
-                try? FileManager.default.removeItem(at: tempRoot!)
-                return
-            }
-        }
-        
-        defer {
-            if let tempRoot = tempRoot {
-                try? FileManager.default.removeItem(at: tempRoot)
-            }
-        }
-        
-        job.appendLog(isSDRescue ? "Starting Stage 2/2: Initializing Core ML pipeline on Neural Engine..." : "Starting Stage 2: Initializing Core ML pipeline on Neural Engine...")
-        
+
+        let targetScale = max(2, job.configuration.resolution.scaleFactor)   // upscaling modes never 1x
+        let isSDRescue = (job.configuration.mode == .special_SDRescue)
         let modelName = job.configuration.mode.modelName ?? "realesr-animevideov3"
-        job.appendLog("Loading model: \(modelName).mlmodelc (takes 1-4 seconds on first load)...")
-        
-        guard let upscaler = try? CoreMLUpscaler(modelName: modelName) else {
+
+        // --- Optional SD-Rescue pre-pass (Anime4K Restore VL -> PNG frames) runs out-of-process. ---
+        var denoisedFramesDir: URL?
+        var tempRoot: URL?
+        if isSDRescue {
+            let root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("A4K_ANE_\(job.id.uuidString)")
+            let frames = root.appendingPathComponent("denoised")
+            do { try FileManager.default.createDirectory(at: frames, withIntermediateDirectories: true) }
+            catch { job.state = .failed; job.errorMessage = "Temp dir failed."; return }
+            tempRoot = root; denoisedFramesDir = frames
+
+            guard let ffmpeg = FFmpegLocator.ffmpegURL else {
+                job.state = .failed; job.errorMessage = "Bundled ffmpeg missing."; return
+            }
+            let shader = "\(FFmpegLocator.shaderDirectoryPath)/Anime4K_Restore_CNN_VL.glsl"
+            let args = ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y",
+                        "-i", job.file.url.path,
+                        "-vf", "hwupload,libplacebo=custom_shader_path=\(shader),hwdownload,format=rgb24",
+                        frames.appendingPathComponent("%08d.png").path]
+            job.appendLog("Stage 1/2: Anime4K Restore VL pre-pass…")
+            let ok = await runSubprocess(executableURL: ffmpeg, arguments: args, job: job, step: 1)
+            if !ok || cancellationRequested {
+                try? FileManager.default.removeItem(at: root)
+                if cancellationRequested { /* runSubprocess already set .cancelled */ }
+                return
+            }
+        }
+        defer { if let r = tempRoot { try? FileManager.default.removeItem(at: r) } }
+
+        // --- Load model (compiles .mlpackage on first use). ---
+        let upscaler: CoreMLUpscaler
+        do { upscaler = try CoreMLUpscaler(modelName: modelName) }
+        catch {
             job.state = .failed
-            job.errorMessage = "Failed to load CoreML model: \(modelName).mlmodelc. Make sure you compile the model and place it in the app bundle."
-            job.appendLog("❌ Error: \(job.errorMessage!)")
+            job.errorMessage = "Failed to load model \(modelName): \(error.localizedDescription)"
+            job.appendLog("ERROR: \(job.errorMessage!)")
             return
         }
 
-        // Setup AVAssetReader and AVAssetWriter
-        let asset = AVAsset(url: job.file.url)
-        
-        let naturalSize: CGSize
-        let nominalFrameRate: Float
-        let totalDuration: Double
-        
-        if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
-            naturalSize = (try? await videoTrack.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
-            nominalFrameRate = (try? await videoTrack.load(.nominalFrameRate)) ?? 23.976
-            totalDuration = (try? await asset.load(.duration))?.seconds ?? (job.file.durationSeconds ?? 1.0)
+        // --- Gather source metadata. ---
+        let asset = AVURLAsset(url: job.file.url)
+        let (naturalSize, fps, duration): (CGSize, Double, Double)
+        if let track = try? await asset.loadTracks(withMediaType: .video).first {
+            naturalSize = (try? await track.load(.naturalSize)) ?? CGSize(width: 1920, height: 1080)
+            fps = Double((try? await track.load(.nominalFrameRate)) ?? 23.976)
+            duration = (try? await asset.load(.duration))?.seconds ?? (job.file.durationSeconds ?? 1.0)
         } else {
-            naturalSize = CGSize(width: 1920, height: 1080)
-            nominalFrameRate = 23.976
-            totalDuration = job.file.durationSeconds ?? 1.0
+            naturalSize = CGSize(width: 1920, height: 1080); fps = 23.976; duration = job.file.durationSeconds ?? 1.0
         }
-        
-        let width = Int(naturalSize.width)
-        let height = Int(naturalSize.height)
-        let fps = Double(nominalFrameRate)
-        
-        guard let reader = try? AVAssetReader(asset: asset) else {
-            job.state = .failed
-            job.errorMessage = "Failed to initialize AVAssetReader."
-            job.appendLog("❌ Error: \(job.errorMessage!)")
-            return
+        let inW = Int(naturalSize.width), inH = Int(naturalSize.height)
+        let outW = inW * targetScale, outH = inH * targetScale
+        let totalFrames = max(1, Int(duration * fps))
+
+        // Capture Sendable values; run the heavy loop OFF the main actor.
+        let userCancelled: @Sendable () -> Bool = { [weak self] in self?.cancellationRequested ?? true }
+        let denoisedDir = denoisedFramesDir
+        let outputURL = job.outputURL!
+        let codec = job.configuration.codec
+
+        let result: CoreMLJobResult = await Task.detached(priority: .userInitiated) {
+            await Self.runANEEncode(job: job, upscaler: upscaler, asset: asset,
+                                    isSDRescue: isSDRescue, denoisedDir: denoisedDir,
+                                    inW: inW, inH: inH, outW: outW, outH: outH, fps: fps,
+                                    targetScale: targetScale, totalFrames: totalFrames,
+                                    outputURL: outputURL, codec: codec, isCancelled: userCancelled)
+        }.value
+
+        switch result {
+        case .completed:
+            job.state = .completed; job.progress = 1.0; job.endDate = Date()
+            job.appendLog("Core ML (ANE) processing completed.")
+        case .cancelled:
+            job.state = .cancelled; job.endDate = Date()
+            job.appendLog("Processing cancelled by user.")
+        case .failed(let msg):
+            job.state = .failed; job.errorMessage = msg; job.endDate = Date()
+            job.appendLog("ERROR: \(msg)")
         }
-        
-        var readerOutput: AVAssetReaderTrackOutput?
-        var hasReaderOutputs = false
-        
-        if !isSDRescue {
-            if let videoTrack = try? await asset.loadTracks(withMediaType: .video).first {
-                let outputSettings: [String: Any] = [
-                    kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA
-                ]
-                let out = AVAssetReaderTrackOutput(track: videoTrack, outputSettings: outputSettings)
-                if reader.canAdd(out) {
-                    reader.add(out)
-                    readerOutput = out
-                    hasReaderOutputs = true
-                }
-            }
+    }
+
+    private enum CoreMLJobResult: Sendable { case completed, cancelled, failed(String) }
+
+    /// Off-main-actor ANE encode loop. Reads frames (decoded source or denoised PNGs),
+    /// upscales each via Core ML, writes them in order. Constant memory, back-pressured.
+    nonisolated private static func runANEEncode(
+        job: ProcessingJob, upscaler: CoreMLUpscaler, asset: AVURLAsset,
+        isSDRescue: Bool, denoisedDir: URL?, inW: Int, inH: Int, outW: Int, outH: Int,
+        fps: Double, targetScale: Int, totalFrames: Int, outputURL: URL,
+        codec: VideoCodec, isCancelled: @escaping @Sendable () -> Bool
+    ) async -> CoreMLJobResult {
+        // Writer (HEVC into a temp .mov, then remux to the requested container/codec if needed).
+        let needsRemux = (outputURL.pathExtension.lowercased() == "mkv") || (codec == .svtAV1)
+        let writeURL = needsRemux
+            ? FileManager.default.temporaryDirectory.appendingPathComponent("A4K_\(job.id.uuidString).mov")
+            : outputURL
+        try? FileManager.default.removeItem(at: writeURL)
+
+        guard let writer = try? AVAssetWriter(outputURL: writeURL, fileType: .mov) else {
+            return .failed("Failed to create writer.")
         }
-        
-        guard let writer = try? AVAssetWriter(outputURL: job.outputURL!, fileType: .mp4) else {
-            job.state = .failed
-            job.errorMessage = "Failed to initialize AVAssetWriter."
-            job.appendLog("❌ Error: \(job.errorMessage!)")
-            return
-        }
-        
-        // Output settings for encoding
-        let upscaleScale = 4
-        let outputWidth = width * upscaleScale
-        let outputHeight = height * upscaleScale
-        
-        let averageBitRate: Int
-        switch job.configuration.compression {
-        case .visuallyLossless:
-            averageBitRate = Int(fps * Double(outputWidth) * Double(outputHeight) * 0.15)
-        case .balanced:
-            averageBitRate = Int(fps * Double(outputWidth) * Double(outputHeight) * 0.08)
-        case .customQuality(let q):
-            let factor = Double(q) / 100.0
-            averageBitRate = Int(fps * Double(outputWidth) * Double(outputHeight) * 0.20 * factor)
-        case .fixedBitrate(let mbps):
-            averageBitRate = mbps * 1_000_000
-        }
-        
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
-            AVVideoWidthKey: outputWidth,
-            AVVideoHeightKey: outputHeight,
+            AVVideoWidthKey: outW, AVVideoHeightKey: outH,
             AVVideoCompressionPropertiesKey: [
-                AVVideoAverageBitRateKey: averageBitRate,
-                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel
+                AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel,
+                AVVideoAverageBitRateKey: Int(fps * Double(outW) * Double(outH) * 0.12)
             ]
         ]
-        
-        let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
-        let pixelBufferAdaptor = AVAssetWriterInputPixelBufferAdaptor(
-            assetWriterInput: writerInput,
+        let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
+        vInput.expectsMediaDataInRealTime = false
+        let adaptor = AVAssetWriterInputPixelBufferAdaptor(
+            assetWriterInput: vInput,
             sourcePixelBufferAttributes: [
                 kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-                kCVPixelBufferWidthKey as String: outputWidth,
-                kCVPixelBufferHeightKey as String: outputHeight
-            ]
-        )
-        
-        if writer.canAdd(writerInput) {
-            writer.add(writerInput)
-        } else {
-            job.state = .failed
-            job.errorMessage = "Failed to add video track input to writer."
-            job.appendLog("❌ Error: \(job.errorMessage!)")
-            return
+                kCVPixelBufferWidthKey as String: outW,
+                kCVPixelBufferHeightKey as String: outH])
+        guard writer.canAdd(vInput) else { return .failed("Cannot add video track.") }
+        writer.add(vInput)
+
+        // Reader for the decoded source (non-SD path) and for audio passthrough (both paths).
+        guard let reader = try? AVAssetReader(asset: asset) else { return .failed("Failed to create reader.") }
+        var videoOut: AVAssetReaderTrackOutput?
+        if !isSDRescue, let vt = try? await asset.loadTracks(withMediaType: .video).first {
+            let o = AVAssetReaderTrackOutput(track: vt,
+                outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+            if reader.canAdd(o) { reader.add(o); videoOut = o }
         }
-        
-        // Optional Audio track copying
-        var audioReaderOutput: AVAssetReaderTrackOutput?
-        var audioWriterInput: AVAssetWriterInput?
-        
-        if let audioTrack = try? await asset.loadTracks(withMediaType: .audio).first {
-            let out = AVAssetReaderTrackOutput(track: audioTrack, outputSettings: nil)
-            if reader.canAdd(out) {
-                reader.add(out)
-                audioReaderOutput = out
-                hasReaderOutputs = true
-            }
-            
-            let inp = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
-            if writer.canAdd(inp) {
-                writer.add(inp)
-                audioWriterInput = inp
-            }
+        var audioOut: AVAssetReaderTrackOutput?
+        var audioIn: AVAssetWriterInput?
+        if let at = try? await asset.loadTracks(withMediaType: .audio).first {
+            let o = AVAssetReaderTrackOutput(track: at, outputSettings: nil)
+            if reader.canAdd(o) { reader.add(o); audioOut = o }
+            let i = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+            if writer.canAdd(i) { writer.add(i); audioIn = i }
         }
-        
-        if hasReaderOutputs {
-            guard reader.startReading() else {
-                job.state = .failed
-                job.errorMessage = "Reader failed to start reading: \(reader.error?.localizedDescription ?? "unknown error")"
-                job.appendLog("❌ Error: \(job.errorMessage!)")
-                return
-            }
+
+        if videoOut != nil || audioOut != nil {
+            guard reader.startReading() else { return .failed("Reader start failed: \(reader.error?.localizedDescription ?? "")") }
         }
-        
-        guard writer.startWriting() else {
-            job.state = .failed
-            job.errorMessage = "Writer failed to start writing: \(writer.error?.localizedDescription ?? "unknown error")"
-            job.appendLog("❌ Error: \(job.errorMessage!)")
-            return
-        }
-        
+        guard writer.startWriting() else { return .failed("Writer start failed: \(writer.error?.localizedDescription ?? "")") }
         writer.startSession(atSourceTime: .zero)
-        
-        job.appendLog("Processing frames natively via Apple Neural Engine...")
-        
-        var frameCount = 0
-        let totalFrames = Int(totalDuration * Double(fps))
-        let startTime = Date()
-        
-        var videoFinished = false
-        var audioFinished = audioWriterInput == nil
-        
-        while !videoFinished || !audioFinished {
-            if cancellationRequested {
-                if hasReaderOutputs { reader.cancelReading() }
-                writer.cancelWriting()
-                job.state = .cancelled
-                job.appendLog("🛑 Processing cancelled by user.")
-                return
-            }
-            
-            // Try writing audio
-            if !audioFinished, let audioInput = audioWriterInput, audioInput.isReadyForMoreMediaData {
-                if hasReaderOutputs, let sampleBuffer = audioReaderOutput?.copyNextSampleBuffer() {
-                    audioInput.append(sampleBuffer)
-                } else {
-                    audioInput.markAsFinished()
-                    audioFinished = true
+
+        let q = DispatchQueue(label: "a4k.ane.encode")
+        var frameIndex = 0
+        var sdFrame = 1
+        let start = Date()
+
+        func nextUpscaledFrame() -> (CVPixelBuffer, CMTime)? {
+            if isSDRescue {
+                guard let dir = denoisedDir else { return nil }
+                let url = dir.appendingPathComponent(String(format: "%08d.png", sdFrame))
+                guard FileManager.default.fileExists(atPath: url.path),
+                      let ci = CIImage(contentsOf: url) else { return nil }
+                sdFrame += 1
+                let pts = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
+                if let up = try? upscaler.upscale(ci, width: inW, height: inH, targetScale: targetScale) {
+                    return (up, pts)
                 }
+                return nil
+            } else {
+                guard let sb = videoOut?.copyNextSampleBuffer(),
+                      let pb = CMSampleBufferGetImageBuffer(sb) else { return nil }
+                let pts = CMSampleBufferGetPresentationTimeStamp(sb)
+                if let up = try? upscaler.upscale(pb, targetScale: targetScale) { return (up, pts) }
+                return nil
             }
-            
-            // Try writing video
-            if !videoFinished, writerInput.isReadyForMoreMediaData {
-                if isSDRescue {
-                    let frameIndex = frameCount + 1
-                    let fileURL = denoisedFramesDir!.appendingPathComponent(String(format: "%08d.png", frameIndex))
-                    if FileManager.default.fileExists(atPath: fileURL.path) {
-                        if let ciImage = CIImage(contentsOf: fileURL) {
-                            let presentationTime = CMTime(value: CMTimeValue(frameCount), timescale: CMTimeScale(fps))
-                            
-                            do {
-                                let upscaledBuffer = try upscaler.upscaleFullFrameImage(ciImage, width: width, height: height)
-                                pixelBufferAdaptor.append(upscaledBuffer, withPresentationTime: presentationTime)
-                            } catch {
-                                job.appendLog("⚠️ Upscaling failed at frame \(frameCount): \(error.localizedDescription)")
-                            }
-                            
-                            frameCount += 1
-                            let progress = totalFrames > 0 ? min(Double(frameCount) / Double(totalFrames), 0.99) : 0.5
-                            let elapsed = Date().timeIntervalSince(startTime)
-                            let currentFps = Double(frameCount) / max(elapsed, 0.001)
-                            
-                            if frameCount % 10 == 0 || frameCount == totalFrames {
-                                let currentFrameCount = frameCount
-                                let currentFpsStr = String(format: "%.1f", currentFps)
-                                Task { @MainActor in
-                                    job.progress = 0.15 + 0.85 * progress
-                                    job.currentFrame = currentFrameCount
-                                    job.fps = currentFpsStr
-                                    job.speed = String(format: "x%.3f", currentFps / Double(fps))
-                                }
-                            }
-                        } else {
-                            job.appendLog("⚠️ Failed to load PNG frame at \(fileURL.path)")
-                            frameCount += 1
-                        }
-                    } else {
-                        writerInput.markAsFinished()
-                        videoFinished = true
+        }
+
+        // Drive video on a writer-ready callback (back-pressure, no busy-wait).
+        let videoDone = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            vInput.requestMediaDataWhenReady(on: q) {
+                while vInput.isReadyForMoreMediaData {
+                    if isCancelled() { cont.resume(returning: false); return }
+                    guard let (buf, pts) = nextUpscaledFrame() else {
+                        vInput.markAsFinished(); cont.resume(returning: true); return
                     }
-                } else {
-                    if let sampleBuffer = readerOutput?.copyNextSampleBuffer() {
-                        if let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
-                            let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-                            
-                            do {
-                                let upscaledBuffer = try upscaler.upscaleFullFrame(pixelBuffer)
-                                pixelBufferAdaptor.append(upscaledBuffer, withPresentationTime: presentationTime)
-                            } catch {
-                                job.appendLog("⚠️ Upscaling failed at frame \(frameCount): \(error.localizedDescription)")
-                            }
-                            
-                            frameCount += 1
-                            let progress = totalFrames > 0 ? min(Double(frameCount) / Double(totalFrames), 0.99) : 0.5
-                            let elapsed = Date().timeIntervalSince(startTime)
-                            let currentFps = Double(frameCount) / max(elapsed, 0.001)
-                            
-                            if frameCount % 10 == 0 || frameCount == totalFrames {
-                                let currentFrameCount = frameCount
-                                let currentFpsStr = String(format: "%.1f", currentFps)
-                                Task { @MainActor in
-                                    job.progress = progress
-                                    job.currentFrame = currentFrameCount
-                                    job.fps = currentFpsStr
-                                    job.speed = String(format: "x%.3f", currentFps / Double(fps))
-                                }
-                            }
+                    adaptor.append(buf, withPresentationTime: pts)
+                    frameIndex += 1
+                    if frameIndex % 10 == 0 {
+                        let f = frameIndex
+                        let elapsed = Date().timeIntervalSince(start)
+                        let cur = Double(f) / max(elapsed, 0.001)
+                        Task { @MainActor in
+                            job.progress = min(0.99, Double(f) / Double(totalFrames))
+                            job.currentFrame = f
+                            job.fps = String(format: "%.1f", cur)
+                            job.speed = String(format: "x%.3f", cur / fps)
                         }
-                    } else {
-                        writerInput.markAsFinished()
-                        videoFinished = true
                     }
                 }
             }
-            
-            if (!videoFinished && !writerInput.isReadyForMoreMediaData) &&
-               (!audioFinished && !(audioWriterInput?.isReadyForMoreMediaData ?? false)) {
-                try? await Task.sleep(nanoseconds: 1_000_000) // 1ms sleep
+        }
+        if !videoDone { reader.cancelReading(); writer.cancelWriting(); return .cancelled }
+
+        // Audio passthrough.
+        if let aIn = audioIn, let aOut = audioOut {
+            let adone = await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                aIn.requestMediaDataWhenReady(on: q) {
+                    while aIn.isReadyForMoreMediaData {
+                        if isCancelled() { aIn.markAsFinished(); cont.resume(); return }
+                        if let sb = aOut.copyNextSampleBuffer() { aIn.append(sb) }
+                        else { aIn.markAsFinished(); cont.resume(); return }
+                    }
+                }
             }
+            _ = adone
         }
-        
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            writer.finishWriting {
-                continuation.resume()
+
+        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+            writer.finishWriting { cont.resume() }
+        }
+        guard writer.status == .completed else {
+            return .failed("Writer failed: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")")
+        }
+
+        // Remux to requested container/codec if needed (out-of-process, copy or AV1 transcode).
+        if needsRemux {
+            guard let ffmpeg = await MainActor.run(body: { FFmpegLocator.ffmpegURL }) else {
+                return .failed("ffmpeg missing for remux.")
             }
+            var args = ["-y", "-i", writeURL.path, "-i", job.file.url.path,
+                        "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?"]
+            if codec == .svtAV1 {
+                args += ["-c:v", "libsvtav1", "-pix_fmt", "yuv420p10le", "-crf", "30", "-preset", "6"]
+            } else {
+                args += ["-c:v", "copy"]
+            }
+            args += ["-c:a", "copy", "-c:s", "copy", outputURL.path]
+            let proc = Process()
+            proc.executableURL = ffmpeg
+            proc.arguments = args
+            proc.environment = await MainActor.run(body: { FFmpegLocator.processEnvironment() })
+            do { try proc.run(); proc.waitUntilExit() }
+            catch { return .failed("Remux launch failed: \(error.localizedDescription)") }
+            try? FileManager.default.removeItem(at: writeURL)
+            if proc.terminationStatus != 0 { return .failed("Remux exited \(proc.terminationStatus).") }
         }
-        
-        if (!hasReaderOutputs || reader.status == .completed) && writer.status == .completed {
-            job.state = .completed
-            job.progress = 1.0
-            job.endDate = Date()
-            job.appendLog("✅ Native Core ML ANE processing completed successfully.")
-        } else {
-            let readerStatusRaw = hasReaderOutputs ? reader.status.rawValue : 0
-            job.state = .failed
-            job.errorMessage = "Reader/Writer failed: reader status \(readerStatusRaw), writer status \(writer.status.rawValue)"
-            job.appendLog("❌ Error: \(job.errorMessage!)")
-        }
+        return .completed
     }
 
     // MARK: - Progress Updates (MainActor-Isolated)
