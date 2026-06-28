@@ -33,14 +33,16 @@ void QtHost::runOnQtThread(std::function<void()> fn) {
     std::mutex mtx;
     std::condition_variable cv;
     bool done = false;
+    std::exception_ptr ex = nullptr;
     QMetaObject::invokeMethod(qApp, [&] {
-        fn();
+        try { fn(); } catch (...) { ex = std::current_exception(); }
         std::unique_lock<std::mutex> lk(mtx);
         done = true;
         cv.notify_one();
     }, Qt::QueuedConnection);
     std::unique_lock<std::mutex> lk(mtx);
     cv.wait(lk, [&] { return done; });
+    if (ex) std::rethrow_exception(ex);
 }
 
 void QtHost::threadMain() {

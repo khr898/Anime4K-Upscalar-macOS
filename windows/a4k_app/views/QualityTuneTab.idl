@@ -1,8 +1,0 @@
-namespace Anime4KUpscaler.views
-{
-    [default_interface]
-    runtimeclass QualityTuneTab : Microsoft.UI.Xaml.Controls.UserControl
-    {
-        QualityTuneTab();
-    }
-}

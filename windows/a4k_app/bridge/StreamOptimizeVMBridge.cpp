@@ -68,10 +68,9 @@ void StreamOptimizeVMBridge::SnapshotViewState() {
     auto  size  = vm->totalFileSize();
     auto  dur   = vm->totalDuration();
     int   total = vm->totalJobs();
-    int   cur   = vm->currentJobIndex();
 
     auto self = get_strong();
-    m_dq.TryEnqueue([self, isCfg, can, done, fail, alld, size, dur, total, cur]() {
+    m_dq.TryEnqueue([self, isCfg, can, done, fail, alld, size, dur, total]() {
         bool changed = (self->m_isConfiguring != isCfg) || (self->m_canStart != can);
         self->m_isConfiguring     = isCfg;
         self->m_isProcessing      = !isCfg;

@@ -50,10 +50,14 @@ void WinUiPickerService::pickFiles(const QString& title,
 
     auto op = picker.PickMultipleFilesAsync();
     op.Completed([done = std::move(done), qtHost = m_qtHost]
-        (auto const& asyncOp, auto) {
+        (auto const& asyncOp, winrt::Windows::Foundation::AsyncStatus status) {
         QStringList paths;
-        for (auto const& f : asyncOp.GetResults())
-            paths << fromHString(f.Path());
+        if (status == winrt::Windows::Foundation::AsyncStatus::Completed) {
+            try {
+                for (auto const& f : asyncOp.GetResults())
+                    paths << fromHString(f.Path());
+            } catch (...) {}
+        }
         qtHost->postToQtThread([done = std::move(done), paths = std::move(paths)] {
             done(paths);
         });

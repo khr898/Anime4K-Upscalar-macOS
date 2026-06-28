@@ -2,6 +2,7 @@
 #include "bridge/AppVMBridge.h"
 #include "../src/viewmodels/AppViewModel.h"
 #include "../src/models/Models.h"
+#include "../src/viewmodels/ProcessingEngine.h"
 
 namespace {
 
@@ -207,64 +208,77 @@ void AppVMBridge::ConnectSignals() {
         QObject::connect(vm, &AppViewModel::configurationChanged, [weak]{ if (auto b = weak.get()) b->SnapshotConfig(); }),
         QObject::connect(vm, &AppViewModel::outputDirectoryChanged,[weak]{ if (auto b = weak.get()) b->SnapshotOutput(); }),
         QObject::connect(vm, &AppViewModel::dependencyAlertChanged,[weak]{ if (auto b = weak.get()) b->SnapshotDependencies(); }),
+        QObject::connect(vm->engine(), &ProcessingEngine::jobProgressUpdated, [weak](ProcessingJob*){ if (auto b = weak.get()) b->SnapshotJobs(); }),
     };
 }
 
 // ---- Commands ----
 
-void AppVMBridge::StartProcessing()      { m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->startProcessing(); }); }
-void AppVMBridge::CancelProcessing()     { m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->cancelProcessing(); }); }
-void AppVMBridge::ReturnToConfiguration(){ m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->returnToConfiguration(); }); }
-void AppVMBridge::AddFiles()             { m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->addFiles(); }); }
-void AppVMBridge::RemoveSelectedFile()   { m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->removeSelectedFile(); }); }
-void AppVMBridge::RemoveAllFiles()       { m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->removeAllFiles(); }); }
-void AppVMBridge::SelectOutputDirectory(){ m_qtHost.postToQtThread([this]{ m_qtHost.appViewModel()->selectOutputDirectory(); }); }
+void AppVMBridge::StartProcessing()      { auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->startProcessing(); }); }
+void AppVMBridge::CancelProcessing()     { auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->cancelProcessing(); }); }
+void AppVMBridge::ReturnToConfiguration(){ auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->returnToConfiguration(); }); }
+void AppVMBridge::AddFiles()             { auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->addFiles(); }); }
+void AppVMBridge::RemoveSelectedFile()   { auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->removeSelectedFile(); }); }
+void AppVMBridge::RemoveAllFiles()       { auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->removeAllFiles(); }); }
+void AppVMBridge::SelectOutputDirectory(){ auto* vm = m_qtHost.appViewModel(); m_qtHost.postToQtThread([vm]{ vm->selectOutputDirectory(); }); }
 void AppVMBridge::AddFilesFromPaths(std::vector<winrt::hstring> const& paths) {
     QStringList qpaths;
     for (auto const& p : paths) qpaths << QString::fromWCharArray(p.c_str());
-    m_qtHost.postToQtThread([this, qpaths = std::move(qpaths)]{
-        m_qtHost.appViewModel()->addFilesFromDrop(qpaths);
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, qpaths = std::move(qpaths)]{
+        vm->addFilesFromDrop(qpaths);
     });
 }
 
 // ---- Config setters ----
 
 void AppVMBridge::SetCodec(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{
-        auto& cfg = m_qtHost.appViewModel()->configurationRef();
-        cfg.codec = static_cast<VideoCodec>(v);
-        m_qtHost.appViewModel()->onCodecChanged();
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{
+        vm->configurationRef().codec = static_cast<VideoCodec>(v);
+        vm->onCodecChanged();
     });
 }
 void AppVMBridge::SetPreset(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{
-        m_qtHost.appViewModel()->setCompressionPreset(static_cast<CompressionPreset>(v));
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{
+        vm->setCompressionPreset(static_cast<CompressionPreset>(v));
     });
 }
 void AppVMBridge::SetResolution(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{
-        m_qtHost.appViewModel()->configurationRef().resolution = static_cast<TargetResolution>(v);
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{
+        vm->configurationRef().resolution = static_cast<TargetResolution>(v);
+        vm->configurationChanged();
     });
 }
 void AppVMBridge::SetQualityValue(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{ m_qtHost.appViewModel()->updateCustomQuality(v); });
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{ vm->updateCustomQuality(v); });
 }
 void AppVMBridge::SetBitrateValue(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{ m_qtHost.appViewModel()->updateCustomBitrate(v); });
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{ vm->updateCustomBitrate(v); });
 }
 void AppVMBridge::SetLongGOP(bool v) {
-    m_qtHost.postToQtThread([this, v]{
-        m_qtHost.appViewModel()->configurationRef().longGOPEnabled = v;
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{
+        vm->configurationRef().longGOPEnabled = v;
+        vm->configurationChanged();
     });
 }
 void AppVMBridge::SetSvtPreset(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{
-        m_qtHost.appViewModel()->configurationRef().svtAV1Preset = v;
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{
+        vm->configurationRef().svtAV1Preset = v;
+        vm->configurationChanged();
     });
 }
 void AppVMBridge::SetSelectedMode(int32_t v) {
-    m_qtHost.postToQtThread([this, v]{
-        m_qtHost.appViewModel()->configurationRef().mode = static_cast<Anime4KMode>(v);
+    auto* vm = m_qtHost.appViewModel();
+    m_qtHost.postToQtThread([vm, v]{
+        vm->configurationRef().mode = static_cast<Anime4KMode>(v);
+        vm->configurationChanged();
     });
 }
 

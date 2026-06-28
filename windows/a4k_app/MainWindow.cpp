@@ -54,6 +54,11 @@ void MainWindow::ConnectBridge() {
                 UpdateDependencyAlert(b2->ShowDependencyAlert(), b2->DependencyMessage());
         }
     });
+
+    Closed([this, b](auto&&, auto&&) {
+        b->PropertyChanged(m_bridgeToken);
+        m_bridgeToken = {};
+    });
 }
 
 void MainWindow::OnDependencyInfoBarClosed(
@@ -69,9 +74,12 @@ void MainWindow::OnTabSelectionChanged(
 }
 
 void MainWindow::UpdateDependencyAlert(bool show, winrt::hstring const& message) {
-    DispatcherQueue().TryEnqueue([this, show, message]() {
-        DependencyInfoBar().Message(message);
-        DependencyInfoBar().IsOpen(show);
+    auto weak = get_weak();
+    DispatcherQueue().TryEnqueue([weak, show, message]() {
+        if (auto self = weak.get()) {
+            self->DependencyInfoBar().Message(message);
+            self->DependencyInfoBar().IsOpen(show);
+        }
     });
 }
 

@@ -67,8 +67,6 @@ UIElement ProcessingPanel::MakeJobRow(JobSnapshot const& snap) {
 
     auto grid = Grid();
     grid.ColumnSpacing(8);
-    GridLength starLen; starLen.GridUnitType = GridUnitType::Star; starLen.Value = 1;
-    GridLength autoLen; autoLen.GridUnitType = GridUnitType::Auto;
     grid.ColumnDefinitions().Append([] { ColumnDefinition c; GridLength g; g.GridUnitType=GridUnitType::Star; g.Value=1; c.Width(g); return c; }());
     grid.ColumnDefinitions().Append([] { ColumnDefinition c; GridLength g; g.GridUnitType=GridUnitType::Auto; c.Width(g); return c; }());
 
@@ -83,7 +81,7 @@ UIElement ProcessingPanel::MakeJobRow(JobSnapshot const& snap) {
 
     auto progBar = ProgressBar();
     progBar.Minimum(0); progBar.Maximum(100);
-    progBar.Value(snap.progress);
+    progBar.Value(snap.progress * 100.0);
 
     auto detailText = TextBlock();
     detailText.Text(snap.details);
