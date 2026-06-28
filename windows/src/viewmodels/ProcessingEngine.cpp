@@ -225,17 +225,17 @@ void ProcessingEngine::executeNextStep() {
             return;
         }
 
-        QString modelName = realesrganModelName(m_currentJob->configuration.mode);
         QString modelsDir = FFmpegLocator::realesrganModelsDirectory();
+        int target = scaleFactor(m_currentJob->configuration.resolution);
+        NcnnModel m = resolveNcnnModel(m_currentJob->configuration.mode, target, modelsDir);
+        m_ncnnScale = m.scale; m_ncnnTarget = target;
+        m_expectedFrameCount = QDir(m_tempFramesDir).entryList(QStringList() << "*.png", QDir::Files).count();
 
         QStringList arguments = {
-            "-i", m_tempFramesDir,
-            "-o", m_tempUpscaledDir,
-            "-n", modelName,
-            "-m", modelsDir,
-            "-s", "4",
-            "-j", "1:2:2",
-            "-t", "0"
+            "-i", m_tempFramesDir, "-o", m_tempUpscaledDir,
+            "-n", m.name, "-m", modelsDir,
+            "-s", QString::number(m.scale),
+            "-j", "1:2:2", "-t", "0", "-f", "png"
         };
 
         m_currentJob->appendLog("$ realesrgan-ncnn-vulkan " + arguments.join(" "));
@@ -386,6 +386,11 @@ void ProcessingEngine::executeNextStep() {
             arguments.append({"-g", "240"});
         }
 
+        if (m_ncnnScale != m_ncnnTarget) {
+            arguments.append({"-vf", QString("scale=iw*%1/%2:ih*%1/%2:flags=lanczos")
+                                         .arg(m_ncnnTarget).arg(m_ncnnScale)});
+        }
+
         arguments.append({"-progress", "pipe:1"});
         arguments.append(m_currentJob->outputPath);
 
@@ -487,17 +492,7 @@ void ProcessingEngine::onStderrReady() {
         QString trimmed = line.trimmed();
         
         if (m_currentStep == 2) {
-            // realesrgan progress parsing
-            static QRegularExpression percentRegex("(\\d+\\.\\d+)%");
-            auto match = percentRegex.match(trimmed);
-            if (match.hasMatch()) {
-                double percent = match.captured(1).toDouble() / 100.0;
-                m_pendProgress = 0.15 + 0.70 * percent;
-                m_pendFps = "realesr";
-                m_pendFrame = static_cast<int>(percent * 100.0);
-            } else {
-                m_logBatch.append(trimmed);
-            }
+            m_logBatch.append(trimmed);
             continue;
         }
 
@@ -597,7 +592,11 @@ void ProcessingEngine::handleThrottledUpdates() {
         m_pendFps = std::nullopt;
         updated = true;
     }
-    if (m_pendProgress.has_value()) {
+    if (m_currentStep == 2 && m_expectedFrameCount > 0) {
+        int done = QDir(m_tempUpscaledDir).entryList(QStringList() << "*.png", QDir::Files).count();
+        m_currentJob->progress = 0.15 + 0.70 * std::min(1.0, double(done) / m_expectedFrameCount);
+        updated = true;
+    } else if (m_pendProgress.has_value()) {
         m_currentJob->progress = m_pendProgress.value();
         m_pendProgress = std::nullopt;
         updated = true;

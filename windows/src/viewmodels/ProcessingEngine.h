@@ -65,6 +65,9 @@ private:
     QString m_tempFramesDir;
     QString m_tempUpscaledDir;
     QString m_tempRootPath;
+    int m_ncnnScale = 4;
+    int m_ncnnTarget = 4;
+    int m_expectedFrameCount = 0;
 
     void executeNextStep();
     void cleanupTempDirs();

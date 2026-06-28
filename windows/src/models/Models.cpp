@@ -173,6 +173,19 @@ QString realesrganModelName(Anime4KMode mode) {
     }
 }
 
+NcnnModel resolveNcnnModel(Anime4KMode mode, int target, const QString& modelsDir) {
+    auto exists = [&](const QString& n){ return QFileInfo::exists(QDir(modelsDir).filePath(n + ".param")); };
+    QString base = realesrganModelName(mode);
+    if (base == "realesr-animevideov3") {
+        int s = (target == 2 || target == 3 || target == 4) ? target : 4;
+        QString ex = QString("realesr-animevideov3-x%1").arg(s);
+        if (exists(ex)) return { ex, s };
+        if (exists("realesr-animevideov3")) return { "realesr-animevideov3", s };
+        return { ex, s };
+    }
+    return { base, 4 };  // x4plus[-anime] are 4x-only
+}
+
 QVector<Anime4KShader> shaderPipeline(Anime4KMode mode) {
     if (isNeuralSR(mode) || isSpecialANE(mode)) return {};
     switch (mode) {
@@ -235,6 +248,9 @@ QString symbolName(ModeCategory cat) {
 }
 
 QVector<Anime4KMode> modesForCategory(ModeCategory cat) {
+#ifndef Q_OS_MAC
+    if (cat == ModeCategory::Special) return {};
+#endif
     QVector<Anime4KMode> results;
     for (int i = 1; i <= 22; ++i) {
         Anime4KMode mode = static_cast<Anime4KMode>(i);

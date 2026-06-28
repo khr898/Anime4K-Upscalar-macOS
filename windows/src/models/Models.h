@@ -79,6 +79,9 @@ bool involvesUpscaling(Anime4KMode mode);
 bool isNeuralSR(Anime4KMode mode);
 bool isSpecialANE(Anime4KMode mode);
 QString realesrganModelName(Anime4KMode mode);
+
+struct NcnnModel { QString name; int scale; };
+NcnnModel resolveNcnnModel(Anime4KMode mode, int target, const QString& modelsDir);
 QVector<Anime4KShader> shaderPipeline(Anime4KMode mode);
 
 // MARK: - Mode Category
