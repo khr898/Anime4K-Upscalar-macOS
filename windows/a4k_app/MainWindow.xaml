@@ -59,13 +59,6 @@
                 <views:StreamOptimizeTab x:Name="StreamOptimizeTabContent"/>
             </TabViewItem>
 
-            <TabViewItem Header="Quality Tune" IsClosable="False">
-                <TabViewItem.IconSource>
-                    <FontIconSource Glyph="&#xE713;"/>
-                </TabViewItem.IconSource>
-                <views:QualityTuneTab x:Name="QualityTuneTabContent"/>
-            </TabViewItem>
-
         </TabView>
     </Grid>
 </Window>

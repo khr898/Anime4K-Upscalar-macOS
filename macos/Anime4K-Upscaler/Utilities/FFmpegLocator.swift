@@ -37,6 +37,16 @@ struct FFmpegLocator {
         shaderDirectoryURL?.path ?? ""
     }
 
+    /// URL to the bundled `realesrgan-ncnn-vulkan` binary inside Resources/.
+    static var realesrganURL: URL? {
+        Bundle.main.url(forResource: "realesrgan-ncnn-vulkan", withExtension: nil)
+    }
+
+    /// Absolute path string to the bundled Real-ESRGAN models directory inside Resources/models/.
+    static var realesrganModelsDirectory: String {
+        Bundle.main.resourceURL?.appendingPathComponent("models").path ?? ""
+    }
+
     /// URL to the bundled `libMoltenVK.dylib` inside Frameworks/.
     static var moltenVKURL: URL? {
         frameworksDirectoryURL?.appendingPathComponent("libMoltenVK.dylib")
@@ -103,33 +113,18 @@ struct FFmpegLocator {
     // MARK: - Environment Variables
 
     /// Cached process environment — computed once via dispatch_once semantics,
-    /// reused for every FFmpeg/ffprobe invocation. Eliminates per-process
-    /// dictionary allocation and redundant ICD lock acquisition.
+    /// reused for every FFmpeg/ffprobe invocation. Uses a minimal, fixed PATH
+    /// rather than inheriting the user's environment.
     private static let cachedProcessEnvironment: [String: String] = {
         var env: [String: String] = [:]
-
-        // Inherit minimal environment
-        if let path = ProcessInfo.processInfo.environment["PATH"] {
-            env["PATH"] = path
-        }
-        if let home = ProcessInfo.processInfo.environment["HOME"] {
-            env["HOME"] = home
-        }
-
-        // Vulkan ICD
-        if let icdPath = generateVulkanICDJSON() {
-            env["VK_ICD_FILENAMES"] = icdPath
-        }
-
-        // Dylib search path (Frameworks directory)
+        env["PATH"] = "/usr/bin:/bin"                          // do not inherit user PATH
+        if let home = ProcessInfo.processInfo.environment["HOME"] { env["HOME"] = home }
+        if let icdPath = generateVulkanICDJSON() { env["VK_ICD_FILENAMES"] = icdPath }
         if let fwPath = frameworksDirectoryURL?.path {
             env["DYLD_LIBRARY_PATH"] = fwPath
-            env["DYLD_FRAMEWORK_PATH"] = fwPath
+            env["DYLD_FALLBACK_LIBRARY_PATH"] = fwPath
         }
-
-        // Disable FFmpeg interactive mode
         env["FFREPORT"] = ""
-
         return env
     }()
 

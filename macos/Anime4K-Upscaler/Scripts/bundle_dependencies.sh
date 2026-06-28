@@ -431,8 +431,8 @@ for dylib in "${FRAMEWORKS_DIR}"/*.dylib; do
 done
 
 if [[ "$MOLTENVK_FOUND" == "false" ]]; then
-    echo "warning: libMoltenVK.dylib not found. Vulkan-based libplacebo shaders may not work."
-    echo "warning: Install via: brew install molten-vk"
+    echo "error: libMoltenVK.dylib was not bundled. The app would not be self-contained."
+    exit 1
 fi
 
 # --- 5b. BUNDLE REALESRGAN ---
@@ -455,7 +455,12 @@ if [[ -f "$REALESRGAN_BIN" ]]; then
     cp -f "$REALESRGAN_BIN" "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
     chmod +x "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
     relink_moltenvk_refs "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
-    
+    copy_dylibs_recursive "${RESOURCES_DIR}/realesrgan-ncnn-vulkan"
+    if ! lipo -archs "${RESOURCES_DIR}/realesrgan-ncnn-vulkan" 2>/dev/null | grep -q arm64; then
+        echo "error: realesrgan-ncnn-vulkan lacks an arm64 slice."
+        exit 1
+    fi
+
     echo "📦 Bundling realesrgan models..."
     mkdir -p "${RESOURCES_DIR}/models"
     cp -Rf "${VENDORED_TOOLS_DIR}/models/"* "${RESOURCES_DIR}/models/"
