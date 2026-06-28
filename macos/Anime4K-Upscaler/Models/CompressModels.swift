@@ -2,7 +2,6 @@
 // Domain models for the Compress feature — encoder, content type, HDR, configuration, job, argument builder.
 
 import Foundation
-import SwiftUI
 import Observation
 
 // MARK: - Compress Encoder

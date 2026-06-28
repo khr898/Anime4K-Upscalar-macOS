@@ -2,7 +2,6 @@
 // Domain models for the Stream Optimize feature — configuration, enums, job, argument builder.
 
 import Foundation
-import SwiftUI
 import Observation
 
 // MARK: - Stream Encoder
