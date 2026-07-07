@@ -17,8 +17,15 @@ final class CoreMLUpscaler {
     private let tiles: [(w: Int, h: Int)]      // allowed input sizes, largest first
     private let overlap = 16                    // input-px halo to hide tile seams
 
-    init(modelName: String) throws {
-        let compiledURL = try Self.compiledModelURL(modelName: modelName)
+    convenience init(modelName: String) throws {
+        try self.init(compiledModelURL: Self.compiledModelURL(modelName: modelName))
+    }
+
+    /// Designated initializer from an already-compiled .mlmodelc URL.
+    /// Kept separate from the bundle lookup so tests/CLI harnesses can load
+    /// models without a Bundle.main resource context.
+    init(compiledModelURL compiledURL: URL) throws {
+        let modelName = compiledURL.deletingPathExtension().lastPathComponent
         let config = MLModelConfiguration()
         config.computeUnits = .cpuAndNeuralEngine          // explicit ANE routing
         let model = try MLModel(contentsOf: compiledURL, configuration: config)
@@ -37,7 +44,8 @@ final class CoreMLUpscaler {
 
         // Allowed input tile sizes (enumerated) or the single fixed size.
         var sizes: [(Int, Int)] = []
-        if let enumerated = inImg.sizeConstraint.enumeratedImageSizes, !enumerated.isEmpty {
+        let enumerated = inImg.sizeConstraint.enumeratedImageSizes
+        if !enumerated.isEmpty {
             sizes = enumerated.map { (Int($0.pixelsWide), Int($0.pixelsHigh)) }
         } else {
             sizes = [(inImg.pixelsWide, inImg.pixelsHigh)]
@@ -46,11 +54,16 @@ final class CoreMLUpscaler {
         self.tiles = sizes.map { (w: $0.0, h: $0.1) }
 
         // Native scale from output/input edge ratio; fall back by model name.
+        // A model whose output image constraint is undefined reports a 1x1 (or
+        // otherwise <2x) size — never trust a ratio below 2 for a super-res
+        // model; use the name-based default instead.
+        let nameScale = modelName.lowercased().contains("piper") ? 2 : 4
         if let outImg = outDesc[outKey]?.imageConstraint,
            let first = sizes.first, first.0 > 0, outImg.pixelsWide > 0 {
-            self.nativeScale = max(1, Int((Double(outImg.pixelsWide) / Double(first.0)).rounded()))
+            let ratio = Int((Double(outImg.pixelsWide) / Double(first.0)).rounded())
+            self.nativeScale = ratio >= 2 ? ratio : nameScale
         } else {
-            self.nativeScale = modelName.lowercased().contains("piper") ? 2 : 4
+            self.nativeScale = nameScale
         }
 
         self.ciContext = CIContext(options: [.useSoftwareRenderer: false])
