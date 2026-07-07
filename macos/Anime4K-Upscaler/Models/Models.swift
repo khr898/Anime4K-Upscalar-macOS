@@ -902,18 +902,24 @@ struct FilterGraphBuilder {
             // libplacebo filter invocation per stage.
             filterComponents.append("hwupload")
 
-            for stage in stages {
+            for (index, stage) in stages.enumerated() {
                 let combinedPath = ShaderCombiner.combinedShaderPath(
                     shaders: stage.shaders, directory: shaderDirectory)
                 let escapedPath = combinedPath.replacingOccurrences(of: "'", with: "'\\''")
 
+                // The last libplacebo stage must set the output sw_format:
+                // hwdownload can only download the hwframe's own sw_format, so
+                // without this the download to p010le/yuv420p10le fails with
+                // "Invalid output format ... for hwframe download" (EINVAL).
+                let formatSuffix = (index == stages.count - 1) ? ":format=\(codec.pixelFormat)" : ""
+
                 if stage.scale {
                     filterComponents.append(
-                        "libplacebo=w=iw*2:h=ih*2:custom_shader_path='\(escapedPath)'"
+                        "libplacebo=w=iw*2:h=ih*2:custom_shader_path='\(escapedPath)'\(formatSuffix)"
                     )
                 } else {
                     filterComponents.append(
-                        "libplacebo=custom_shader_path='\(escapedPath)'"
+                        "libplacebo=custom_shader_path='\(escapedPath)'\(formatSuffix)"
                     )
                 }
             }

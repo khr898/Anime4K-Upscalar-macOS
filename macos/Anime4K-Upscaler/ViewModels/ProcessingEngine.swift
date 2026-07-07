@@ -9,6 +9,20 @@ import CoreML
 import VideoToolbox
 import CoreImage
 
+/// Thread-safe cancellation flag shared with detached pipeline work.
+/// Needed because `cancellationRequested` is main-actor-isolated and can't be
+/// read from `@Sendable` closures running off-actor.
+final class CancellationToken: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _isCancelled = false
+    var isCancelled: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return _isCancelled
+    }
+    func cancel() { lock.lock(); _isCancelled = true; lock.unlock() }
+    func reset() { lock.lock(); _isCancelled = false; lock.unlock() }
+}
+
 /// Manages the lifecycle of FFmpeg processes for video upscaling jobs.
 /// Handles process spawning, stderr parsing for progress, cancellation,
 /// and system sleep prevention via IOKit power assertions.
@@ -28,6 +42,7 @@ final class ProcessingEngine {
     @ObservationIgnored private var powerAssertionID: IOPMAssertionID = 0
     @ObservationIgnored private var hasPowerAssertion: Bool = false
     @ObservationIgnored private var cancellationRequested: Bool = false
+    @ObservationIgnored private let cancelToken = CancellationToken()
     @ObservationIgnored private var userInitiatedCancel: Bool = false
     @ObservationIgnored private var activityToken: NSObjectProtocol?
 
@@ -326,6 +341,7 @@ final class ProcessingEngine {
     func cancelAll() {
         userInitiatedCancel = true
         cancellationRequested = true
+        cancelToken.cancel()
         if let process = currentProcess, process.isRunning {
             process.terminate()
         }
@@ -334,6 +350,7 @@ final class ProcessingEngine {
     /// Cancel a specific job if it is currently running.
     func cancelJob(_ job: ProcessingJob) {
         userInitiatedCancel = true
+        cancelToken.cancel()
         if let process = job.processHandle, process.isRunning {
             process.terminate()
         }
@@ -563,6 +580,7 @@ final class ProcessingEngine {
         job.state = .running
         job.progress = 0.0
         job.startDate = Date()
+        cancelToken.reset()   // per-job token; a cancelJob on a previous job must not cancel this one
 
         let targetScale = max(2, job.configuration.resolution.scaleFactor)   // upscaling modes never 1x
         let isSDRescue = (job.configuration.mode == .special_SDRescue)
@@ -622,7 +640,8 @@ final class ProcessingEngine {
         let totalFrames = max(1, Int(duration * fps))
 
         // Capture Sendable values; run the heavy loop OFF the main actor.
-        let userCancelled: @Sendable () -> Bool = { [weak self] in self?.cancellationRequested ?? true }
+        // Default is NOT cancelled — a deallocated engine must not report phantom user cancels.
+        let userCancelled: @Sendable () -> Bool = { [cancelToken] in cancelToken.isCancelled }
         let denoisedDir = denoisedFramesDir
         let outputURL = job.outputURL!
         let codec = job.configuration.codec
