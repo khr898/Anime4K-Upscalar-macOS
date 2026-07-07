@@ -336,7 +336,6 @@ copy_dylibs_recursive "${FRAMEWORKS_DIR}/ffprobe"
 
 if [[ -f "$VENDORED_LIBPLACEBO" ]]; then
     echo "📦 Using vendored libplacebo from: $VENDORED_LIBPLACEBO"
-    local placebo_name
     placebo_name=$(basename "$VENDORED_LIBPLACEBO")
     cp -f "$VENDORED_LIBPLACEBO" "${FRAMEWORKS_DIR}/$placebo_name"
     chmod 644 "${FRAMEWORKS_DIR}/$placebo_name"
@@ -521,6 +520,32 @@ if [[ "$UNRESOLVED" == "true" ]]; then
     exit 1
 fi
 echo "  ✅ All references are self-contained."
+
+# --- 8b. FUNCTIONAL SMOKE TEST ---
+# otool only sees link-time deps; a reference that was never rewritten (dep
+# not found at bundle time) still leaves a launchable-looking bundle. Execute
+# the bundled binaries with a clean environment (no Homebrew fallback) so any
+# dyld failure fails the BUILD instead of shipping as a phantom
+# "cancelled by user" on user machines (exactly how v1.1.07042026 shipped
+# without libav*).
+echo "🔍 Functional smoke test of bundled binaries..."
+if ! env -i PATH=/usr/bin:/bin "${FRAMEWORKS_DIR}/ffmpeg" -version >/dev/null 2>&1; then
+    echo "error: bundled ffmpeg failed to launch in a clean environment (dyld problem):"
+    env -i PATH=/usr/bin:/bin "${FRAMEWORKS_DIR}/ffmpeg" -version 2>&1 | head -5 || true
+    exit 1
+fi
+if ! env -i PATH=/usr/bin:/bin "${FRAMEWORKS_DIR}/ffprobe" -version >/dev/null 2>&1; then
+    echo "error: bundled ffprobe failed to launch in a clean environment (dyld problem)."
+    exit 1
+fi
+if [[ -f "${RESOURCES_DIR}/realesrgan-ncnn-vulkan" ]]; then
+    # realesrgan exits non-zero on -h; only dyld failures print "Library not loaded"
+    if env -i PATH=/usr/bin:/bin "${RESOURCES_DIR}/realesrgan-ncnn-vulkan" -h 2>&1 | grep -q "Library not loaded"; then
+        echo "error: bundled realesrgan-ncnn-vulkan failed to launch (dyld problem)."
+        exit 1
+    fi
+fi
+echo "  ✅ Bundled binaries launch cleanly."
 
 echo ""
 echo "✅ Dependency bundling complete."
