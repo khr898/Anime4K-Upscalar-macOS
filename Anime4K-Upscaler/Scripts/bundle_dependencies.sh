@@ -281,9 +281,13 @@ copy_dylibs_recursive() {
         return
     fi
 
-    # Get ALL non-system dependencies: /opt/homebrew, /usr/local, AND @rpath
+    # Get ALL non-system dependencies: /opt/homebrew, /usr/local, @rpath, AND
+    # @executable_path/../Frameworks/ refs on a pre-rewrapped vendored binary
+    # (e.g. the release-DMG ffmpeg whose xcb deps were never extracted to
+    # VendoredTools). Those refs point at files that may not exist in this
+    # fresh FRAMEWORKS_DIR yet — resolve them from Homebrew by basename below.
     local all_refs
-    all_refs=$(otool -L "$binary" 2>/dev/null | awk 'NR>1 {gsub(/^[[:space:]]+/, ""); print $1}' | grep -E '^(/opt/homebrew|/usr/local|@rpath/)' || true)
+    all_refs=$(otool -L "$binary" 2>/dev/null | awk 'NR>1 {gsub(/^[[:space:]]+/, ""); print $1}' | grep -E '^(/opt/homebrew|/usr/local|@rpath/|@executable_path/\.\./Frameworks/)' || true)
 
     if [[ -z "$all_refs" ]]; then
         return
@@ -366,8 +370,9 @@ while true; do
         # Fix the dylib's own install name
         install_name_tool -id "@executable_path/../Frameworks/${local_dylib_name}" "$dylib" 2>/dev/null || true
 
-        # Fix all references within this dylib — homebrew paths AND @rpath
-        all_refs=$(otool -L "$dylib" | awk 'NR>1 {gsub(/^[[:space:]]+/,""); print $1}' | grep -E '^(/opt/homebrew|/usr/local|@rpath/)' || true)
+        # Fix all references within this dylib — homebrew paths, @rpath, AND
+        # @executable_path/../Frameworks/ refs inherited from vendored binaries.
+        all_refs=$(otool -L "$dylib" | awk 'NR>1 {gsub(/^[[:space:]]+/,""); print $1}' | grep -E '^(/opt/homebrew|/usr/local|@rpath/|@executable_path/\.\./Frameworks/)' || true)
         while IFS= read -r ref; do
             [[ -z "$ref" ]] && continue
             ref_name=$(basename "$ref")

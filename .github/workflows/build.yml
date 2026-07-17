@@ -26,7 +26,15 @@ jobs:
       run: xcodebuild -version
 
     - name: Install Dependencies
-      run: brew install ffmpeg molten-vk xcodegen
+      run: |
+        # Core Homebrew ffmpeg is NOT linked against libplacebo, so the bundler
+        # would reject it and fall back to the stale release-DMG ffmpeg (built
+        # against libx265.215 / the ffmpeg 8.1_1 Cellar, both gone from current
+        # Homebrew) and fail the smoke test. Install the homebrew-ffmpeg tap
+        # build with --with-libplacebo so every dep resolves from current brew.
+        brew tap homebrew-ffmpeg/ffmpeg
+        brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libplacebo --with-fdk-aac
+        brew install molten-vk xcodegen
 
     - name: Resolve release tag and version
       id: get_version
