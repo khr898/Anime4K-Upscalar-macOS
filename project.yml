@@ -28,7 +28,8 @@ targets:
         excludes:
           - Scripts/**
           - "*.entitlements"
-      - path: ../shaders
+          - Resources/Shaders/**
+      - path: Anime4K-Upscaler/Resources/Shaders
         name: Shaders
         type: folder
         buildPhase: resources

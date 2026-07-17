@@ -1,5 +1,9 @@
 # Upscaling Pipeline Audit — macOS & Windows
 
+> **Note:** The Windows port has been discontinued and removed from the repo.
+> The Windows-specific rows and findings below are retained for historical
+> context only; only the macOS pipeline is currently built or shipped.
+
 **Date:** 2026-07-07
 **Method:** Every macOS pipeline was driven end-to-end against a real 5 s
 640×360 test clip (`testsrc2` + sine audio) using the *exact* argument arrays
@@ -116,4 +120,4 @@ is dead on a clean machine. Fixes in `Scripts/bundle_dependencies.sh`:
 - Windows shader path quoting (`custom_shader_path='…'`) relies on Qt returning
   forward-slash paths; spaces are inside single quotes so they are safe, but a
   path containing a literal `'` is only partially escaped. Low risk.
-- `shaders/`, `windows/vendor/` binaries and `screenshots/` were not touched.
+- `Anime4K-Upscaler/Resources/Shaders/`, `Anime4K-Upscaler/Resources/VendoredTools/` binaries and `screenshots/` were not touched.

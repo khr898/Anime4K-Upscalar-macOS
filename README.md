@@ -4,13 +4,13 @@ A native application for upscaling anime and other animated content using Anime4
 
 ## Description
 
-This application provides a user-friendly graphical interface for video upscaling. It supports the lightweight Anime4K GLSL shader algorithms and high-quality Real-ESRGAN neural networks. The macOS version is built with SwiftUI and leverages Apple Neural Engine acceleration, while the Windows version is built with C++ and Qt6, using hardware-accelerated Vulkan subprocesses.
+This application provides a user-friendly graphical interface for video upscaling. It supports the lightweight Anime4K GLSL shader algorithms and high-quality Real-ESRGAN neural networks. The macOS version is built with SwiftUI and leverages Apple Neural Engine acceleration.
 
 ## Features
 
 - **Hybrid Upscaling Engine**: Select between fast real-time Anime4K shader presets and high-fidelity deep learning models.
 - **Apple Neural Engine (ANE) Acceleration**: Native macOS processing pipeline utilizing Core ML on dedicated ANE cores for low power draw and high throughput.
-- **Vulkan-based Neural SR**: Subprocess-based upscaling using `realesrgan-ncnn-vulkan` for cross-platform compatibility on Windows and macOS.
+- **Vulkan-based Neural SR**: Subprocess-based upscaling using `realesrgan-ncnn-vulkan` for hardware-accelerated Vulkan processing on macOS GPUs.
 - **SD Rescue Mode**: Pre-processes degraded or heavily compressed low-resolution sources with Anime4K artifact-removal shaders before upscaling them via the Neural Engine.
 - **Advanced Encoding Controls**: Encode using H.264, HEVC, or AV1. Choose between visually lossless presets, target bitrates, and long-GOP optimization.
 - **Drag-and-Drop Interface**: Easy queue management with real-time status reporting, frame rate tracking, and log output.
@@ -27,7 +27,7 @@ These modes run natively on macOS and are fully accelerated by the **Apple Neura
 - **SPECIAL: PiperSR 2x**: Uses the ANE-optimized `PiperSR` model. It runs near real-time (up to 44 FPS) but is resolution-locked to 2x scale and intended only for clean source files.
 
 ### 2. Neural SR (Vulkan Acceleration)
-These modes run via Vulkan and are available on both Windows and macOS. The pipeline performs a three-stage process: decoding frames to temporary PNGs, upscaling using `realesrgan-ncnn-vulkan`, and re-encoding with FFmpeg.
+These modes run via Vulkan and are available on macOS. The pipeline performs a three-stage process: decoding frames to temporary PNGs, upscaling using `realesrgan-ncnn-vulkan`, and re-encoding with FFmpeg.
 - **ESRGAN Fast**: Fast, compact anime video model (`realesr-animevideov3`).
 - **ESRGAN Quality**: Larger, high-quality anime image model (`realesrgan-x4plus-anime`).
 - **ESRGAN General**: General restoration model (`realesrgan-x4plus`) for live-action or non-anime content.
@@ -51,15 +51,6 @@ Lightweight GLSL edge-reconstruction shaders running in real-time via `libplaceb
 - macOS 14.0 or later, Xcode 15.0 or later, and Swift 5.9 or later are required.
 - Place compiled Core ML `.mlmodelc` directories in the app bundle resources.
 - Run `bundle_dependencies.sh` to bundle `ffmpeg` and `ffprobe` binaries.
-
-### Windows
-- Windows 10/11, Visual Studio 2022 (MSVC), CMake, and Qt 6.5.3 or later are required.
-- Run `windows/download_dependencies.py` to download the architecture-specific `ffmpeg` and `realesrgan-ncnn-vulkan` binaries.
-- Configure and build the project using CMake:
-  ```powershell
-  cmake -B build-x64 -S windows -DCMAKE_BUILD_TYPE=Release
-  cmake --build build-x64 --config Release
-  ```
 
 ## Credits
 

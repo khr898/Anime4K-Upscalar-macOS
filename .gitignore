@@ -19,15 +19,3 @@ DerivedData/
 *.swp
 *.swo
 
-# Visual Studio / Windows
-.vs/
-[Dd]ebug/
-[Rr]elease/
-*.user
-*.suo
-*.db
-*.opendb
-windows/build-x64/
-build-x64/
-windows/vendor/**/*.exe
-
