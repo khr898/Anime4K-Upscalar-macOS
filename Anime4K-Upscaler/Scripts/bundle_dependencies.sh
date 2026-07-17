@@ -10,7 +10,7 @@ FRAMEWORKS_DIR="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
 SHADERS_SRC="${SRCROOT}/Anime4K-Upscaler/Resources/Shaders"
 VENDORED_LIB_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredDylibs"
-VENDORED_LIBPLACEBO="${VENDORED_LIB_DIR}/libplacebo.351.dylib"
+VENDORED_LIBPLACEBO="$(ls "${VENDORED_LIB_DIR}"/libplacebo.*.dylib 2>/dev/null | head -1)"
 VENDORED_TOOLS_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredTools"
 VENDORED_FFMPEG="${VENDORED_TOOLS_DIR}/ffmpeg"
 VENDORED_FFPROBE="${VENDORED_TOOLS_DIR}/ffprobe"
@@ -120,8 +120,10 @@ if [[ -z "$FFMPEG_BIN" ]]; then
     cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/ffprobe" "${VENDORED_FFPROBE}"
     
     # Also extract the libplacebo that matches it to the vendored dylibs dir
+    # (any ABI the DMG ships — not pinned to a specific version)
     mkdir -p "${VENDORED_LIB_DIR}"
-    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/libplacebo.351.dylib" "${VENDORED_LIBPLACEBO}"
+    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/"libplacebo.*.dylib "${VENDORED_LIB_DIR}/"
+    VENDORED_LIBPLACEBO="$(ls "${VENDORED_LIB_DIR}"/libplacebo.*.dylib 2>/dev/null | head -1)"
     
     # Detach and clean up
     hdiutil detach "$MNT_DIR" -quiet

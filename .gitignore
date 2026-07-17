@@ -19,3 +19,8 @@ DerivedData/
 *.swp
 *.swo
 
+# Vendored binaries (regenerated at build time from Homebrew, not pinned)
+Anime4K-Upscaler/Resources/VendoredTools/ffmpeg
+Anime4K-Upscaler/Resources/VendoredTools/ffprobe
+Anime4K-Upscaler/Resources/VendoredDylibs/libplacebo.*.dylib
+
