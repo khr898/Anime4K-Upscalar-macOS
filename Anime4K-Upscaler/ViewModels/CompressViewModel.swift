@@ -36,12 +36,40 @@ final class CompressViewModel {
 
     // MARK: - Processing State
 
-    var viewState: ViewState = .configuration
+    /// Per-batch engine state (set by `executeBatch`). Kept for view compat.
     var isProcessing: Bool = false
     var currentJobIndex: Int = 0
     var totalJobs: Int = 0
     var overallProgress: Double = 0.0
-    var jobs: [CompressJob] = []
+
+    // MARK: - Batch Queue
+
+    /// Queue of batches (frozen preset + jobs) to run sequentially.
+    var batches: [CompressBatch] = []
+
+    /// Selected batch in the sidebar; nil => "New Batch" staging detail.
+    var selectedBatchID: UUID?
+
+    /// ID of the batch currently being run (nil when idle).
+    var currentBatchID: UUID?
+
+    /// True while the queue runner is executing batches.
+    private(set) var isQueueProcessing: Bool = false
+
+    /// Whole-queue cancel flag. Per-batch cancel leaves this false so the runner
+    /// continues to the next pending batch.
+    @ObservationIgnored private var queueCancelled: Bool = false
+
+    /// Jobs of the currently-selected (or running) batch — view-compat mirror.
+    var jobs: [CompressJob] {
+        selectedBatch?.jobs ?? currentBatch?.jobs ?? []
+    }
+
+    /// UI state bridge: nil selectedBatchID => staging; selected batch => processing.
+    /// Replaced by `selectedBatchID` routing in Phase 4.
+    var viewState: ViewState {
+        selectedBatchID == nil ? .configuration : .processing
+    }
 
     enum ViewState: String {
         case configuration
@@ -169,7 +197,18 @@ final class CompressViewModel {
     }
 
     var canStartProcessing: Bool {
-        !files.isEmpty && !isProcessing
+        batches.contains(where: { $0.state == .pending }) && !isQueueProcessing
+    }
+
+    /// Snapshot of the current UI config fields into a `CompressConfiguration`.
+    private var currentConfiguration: CompressConfiguration {
+        CompressConfiguration(
+            encoder: encoder,
+            quality: quality,
+            contentType: contentType,
+            bFrames: bFrames,
+            longGOPEnabled: longGOPEnabled
+        )
     }
 
     var batchSummary: String {
@@ -196,45 +235,130 @@ final class CompressViewModel {
         }
     }
 
-    // MARK: - Processing Control
+    // MARK: - Batch Queue Processing
 
-    func startProcessing() {
-        guard canStartProcessing else { return }
+    /// The currently-selected batch (sidebar selection).
+    var selectedBatch: CompressBatch? {
+        guard let id = selectedBatchID else { return nil }
+        return batches.first(where: { $0.id == id })
+    }
+
+    /// The batch currently being run by the queue runner.
+    var currentBatch: CompressBatch? {
+        guard let id = currentBatchID else { return nil }
+        return batches.first(where: { $0.id == id })
+    }
+
+    /// Snapshot the current preset + staging files into a new pending batch.
+    /// Clears staging. A single file is a valid batch.
+    func enqueueBatch() {
+        guard QueueLogic.canEnqueue(fileCount: files.count) else { return }
 
         if outputDirectoryURL == nil {
             selectOutputDirectory()
             guard outputDirectoryURL != nil else { return }
         }
 
-        let config = CompressConfiguration(
-            encoder: encoder,
-            quality: quality,
-            contentType: contentType,
-            bFrames: bFrames,
-            longGOPEnabled: longGOPEnabled
-        )
+        let config = currentConfiguration
+        let outDir = outputDirectoryURL
+        let batchJobs = files.map { file in
+            CompressJob(file: file, configuration: config, outputDirectory: outDir)
+        }
+        for job in batchJobs { job.state = .queued }
 
-        jobs = files.map { file in
-            CompressJob(file: file, configuration: config, outputDirectory: outputDirectoryURL)
+        let batch = CompressBatch(configuration: config, outputDirectory: outDir, jobs: batchJobs)
+        batches.append(batch)
+
+        files.removeAll()
+        selectedFileID = nil
+        selectedBatchID = batch.id
+    }
+
+    /// Start running the queue. Add-while-running works: `enqueueBatch` appends
+    /// during the run and the runner picks it up next loop turn.
+    func startProcessing() {
+        executeQueue()
+    }
+
+    func executeQueue() {
+        guard !isQueueProcessing else { return }
+        Task { await runQueue() }
+    }
+
+    private func runQueue() async {
+        guard !isQueueProcessing else { return }
+        isQueueProcessing = true
+        queueCancelled = false
+
+        while QueueLogic.shouldContinueQueue(queueCancelled: queueCancelled) {
+            guard let idx = QueueLogic.firstPendingBatchIndex(batches.map(\.state)) else { break }
+            let batch = batches[idx]
+            batch.state = .running
+            batch.startedAt = Date()
+            currentBatchID = batch.id
+
+            await executeBatch(jobs: batch.jobs)
+
+            if batch.state == .running {
+                let wasCancelled = queueCancelled
+                batch.state = QueueLogic.finalizeBatchState(wasCancelled: wasCancelled)
+            }
+            batch.finishedAt = Date()
+
+            if queueCancelled { break }
         }
 
-        viewState = .processing
+        isQueueProcessing = false
+        currentBatchID = nil
+    }
 
-        Task {
-            await executeBatch(jobs: jobs)
+    /// Cancel one batch. Pending → mark cancelled. Running → terminate the
+    /// current process and mark cancelled; queue continues to next pending.
+    func cancelBatch(id: UUID) {
+        guard let batch = batches.first(where: { $0.id == id }) else { return }
+        switch batch.state {
+        case .pending:
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        case .running:
+            cancelCurrentProcess()
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        default:
+            break
         }
     }
 
-    func cancelProcessing() {
+    /// Cancel the whole queue.
+    func cancelAllQueued() {
+        queueCancelled = true
+        for batch in batches where !batch.state.isTerminal {
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        }
+        cancelCurrentProcess()
+    }
+
+    /// Delete a batch from the queue (never the running one).
+    func deleteBatch(id: UUID) {
+        guard let batch = batches.first(where: { $0.id == id }), batch.isDeletable else { return }
+        for job in batch.jobs { SecurityScopeManager.shared.stopAccessing(job.file.url) }
+        batches.removeAll(where: { $0.id == id })
+        if selectedBatchID == id { selectedBatchID = nil }
+    }
+
+    func returnToConfiguration() {
+        selectedBatchID = nil
+    }
+
+    /// Terminate the current FFmpeg process + set the per-batch cancel flag.
+    /// `executeBatch` resets `cancellationRequested` at the top of each call, so
+    /// this is safe to call for a per-batch cancel without poisoning the next batch.
+    private func cancelCurrentProcess() {
         cancellationRequested = true
         if let process = currentProcess, process.isRunning {
             process.terminate()
         }
-    }
-
-    func returnToConfiguration() {
-        guard !isProcessing else { return }
-        viewState = .configuration
     }
 
     // MARK: - Batch Execution

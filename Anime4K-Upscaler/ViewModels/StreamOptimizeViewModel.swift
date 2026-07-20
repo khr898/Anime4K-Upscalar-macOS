@@ -80,15 +80,92 @@ final class StreamOptimizeViewModel {
     // MARK: - Scanned Files
 
     var files: [VideoFile] = []
+    var selectedFileID: UUID?
+
+    // MARK: - File Management
+    // Mirrors CompressViewModel so the Stream Optimize sidebar behaves like the
+    // Upscale/Compress tabs: add via picker or drag-and-drop, remove per-file or
+    // all. Files added here coexist with files populated by scanSourceDirectory.
+
+    func addFiles() {
+        let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
+        guard !urls.isEmpty else { return }
+        for url in urls {
+            guard !files.contains(where: { $0.url == url }) else { continue }
+            let ext = url.pathExtension.lowercased()
+            guard Self.supportedExtensions.contains(ext) else { continue }
+            var videoFile = VideoFile(url: url)
+            videoFile.bookmarkData = SecurityScopeManager.shared.createBookmark(for: url)
+            files.append(videoFile)
+        }
+        if selectedFileID == nil { selectedFileID = files.first?.id }
+    }
+
+    func addFilesFromDrop(_ urls: [URL]) {
+        for url in urls {
+            guard !files.contains(where: { $0.url == url }) else { continue }
+            let ext = url.pathExtension.lowercased()
+            guard Self.supportedExtensions.contains(ext) else { continue }
+            SecurityScopeManager.shared.startAccessing(url)
+            var videoFile = VideoFile(url: url)
+            videoFile.bookmarkData = SecurityScopeManager.shared.createBookmark(for: url)
+            files.append(videoFile)
+        }
+        if selectedFileID == nil { selectedFileID = files.first?.id }
+    }
+
+    func removeFile(id: UUID) {
+        if let index = files.firstIndex(where: { $0.id == id }) {
+            SecurityScopeManager.shared.stopAccessing(files[index].url)
+            files.remove(at: index)
+        }
+        if selectedFileID == id { selectedFileID = files.first?.id }
+    }
+
+    func removeAllFiles() {
+        for file in files { SecurityScopeManager.shared.stopAccessing(file.url) }
+        files.removeAll()
+        selectedFileID = nil
+    }
 
     // MARK: - Processing State
 
-    var viewState: ViewState = .configuration
+    // MARK: - Processing State
+
+    /// Per-batch engine state (set by `executeBatch`). Kept for view compat.
     var isProcessing: Bool = false
     var currentJobIndex: Int = 0
     var totalJobs: Int = 0
     var overallProgress: Double = 0.0
-    var jobs: [StreamOptimizeJob] = []
+
+    // MARK: - Batch Queue
+
+    /// Queue of batches (frozen preset + jobs) to run sequentially.
+    var batches: [StreamOptimizeBatch] = []
+
+    /// Selected batch in the sidebar; nil => "New Batch" staging detail.
+    var selectedBatchID: UUID?
+
+    /// ID of the batch currently being run (nil when idle).
+    var currentBatchID: UUID?
+
+    /// True while the queue runner is executing batches.
+    private(set) var isQueueProcessing: Bool = false
+
+    /// Whole-queue cancel flag. Per-batch cancel leaves this false so the runner
+    /// continues to the next pending batch.
+    @ObservationIgnored private var queueCancelled: Bool = false
+
+    /// Jobs of the currently-selected (or running) batch — view-compat mirror.
+    var jobs: [StreamOptimizeJob] {
+        selectedBatch?.jobs ?? currentBatch?.jobs ?? []
+    }
+
+    /// UI state bridge: nil selectedBatchID => staging; selected batch => processing.
+    /// Replaced by `selectedBatchID` routing in Phase 4.
+    var viewState: ViewState {
+        selectedBatchID == nil ? .configuration : .processing
+    }
 
     enum ViewState: String {
         case configuration
@@ -188,7 +265,7 @@ final class StreamOptimizeViewModel {
     // MARK: - Computed Properties
 
     var canStartProcessing: Bool {
-        !files.isEmpty && !isProcessing && destinationDirectoryURL != nil
+        batches.contains(where: { $0.state == .pending }) && !isQueueProcessing && destinationDirectoryURL != nil
     }
 
     var totalFileSize: String {
@@ -220,31 +297,123 @@ final class StreamOptimizeViewModel {
 
     // MARK: - Processing Control
 
-    func startProcessing() {
-        guard canStartProcessing, let destURL = destinationDirectoryURL else { return }
+    // MARK: - Batch Queue Processing
+
+    /// The currently-selected batch (sidebar selection).
+    var selectedBatch: StreamOptimizeBatch? {
+        guard let id = selectedBatchID else { return nil }
+        return batches.first(where: { $0.id == id })
+    }
+
+    /// The batch currently being run by the queue runner.
+    var currentBatch: StreamOptimizeBatch? {
+        guard let id = currentBatchID else { return nil }
+        return batches.first(where: { $0.id == id })
+    }
+
+    /// Snapshot the current preset + staging files into a new pending batch.
+    /// Clears staging. A single file is a valid batch.
+    func enqueueBatch() {
+        guard QueueLogic.canEnqueue(fileCount: files.count) else { return }
+        guard let destURL = destinationDirectoryURL else { return }
 
         let config = currentConfiguration
-        jobs = files.map { file in
+        let batchJobs = files.map { file in
             StreamOptimizeJob(file: file, configuration: config, destinationDirectory: destURL)
         }
+        for job in batchJobs { job.state = .queued }
 
-        viewState = .processing
+        let batch = StreamOptimizeBatch(configuration: config, outputDirectory: destURL, jobs: batchJobs)
+        batches.append(batch)
 
-        Task {
-            await executeBatch(jobs: jobs)
+        files.removeAll()
+        selectedFileID = nil
+        selectedBatchID = batch.id
+    }
+
+    /// Start running the queue. Add-while-running works.
+    func startProcessing() {
+        executeQueue()
+    }
+
+    func executeQueue() {
+        guard !isQueueProcessing else { return }
+        Task { await runQueue() }
+    }
+
+    private func runQueue() async {
+        guard !isQueueProcessing else { return }
+        isQueueProcessing = true
+        queueCancelled = false
+
+        while QueueLogic.shouldContinueQueue(queueCancelled: queueCancelled) {
+            guard let idx = QueueLogic.firstPendingBatchIndex(batches.map(\.state)) else { break }
+            let batch = batches[idx]
+            batch.state = .running
+            batch.startedAt = Date()
+            currentBatchID = batch.id
+
+            await executeBatch(jobs: batch.jobs)
+
+            if batch.state == .running {
+                let wasCancelled = queueCancelled
+                batch.state = QueueLogic.finalizeBatchState(wasCancelled: wasCancelled)
+            }
+            batch.finishedAt = Date()
+
+            if queueCancelled { break }
+        }
+
+        isQueueProcessing = false
+        currentBatchID = nil
+    }
+
+    /// Cancel one batch. Pending → mark cancelled. Running → terminate the
+    /// current process and mark cancelled; queue continues to next pending.
+    func cancelBatch(id: UUID) {
+        guard let batch = batches.first(where: { $0.id == id }) else { return }
+        switch batch.state {
+        case .pending:
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        case .running:
+            cancelCurrentProcess()
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        default:
+            break
         }
     }
 
-    func cancelProcessing() {
+    /// Cancel the whole queue.
+    func cancelAllQueued() {
+        queueCancelled = true
+        for batch in batches where !batch.state.isTerminal {
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        }
+        cancelCurrentProcess()
+    }
+
+    /// Delete a batch from the queue (never the running one).
+    func deleteBatch(id: UUID) {
+        guard let batch = batches.first(where: { $0.id == id }), batch.isDeletable else { return }
+        for job in batch.jobs { SecurityScopeManager.shared.stopAccessing(job.file.url) }
+        batches.removeAll(where: { $0.id == id })
+        if selectedBatchID == id { selectedBatchID = nil }
+    }
+
+    func returnToConfiguration() {
+        selectedBatchID = nil
+    }
+
+    /// Terminate the current FFmpeg process + set the per-batch cancel flag.
+    /// `executeBatch` resets `cancellationRequested` at the top of each call.
+    private func cancelCurrentProcess() {
         cancellationRequested = true
         if let process = currentProcess, process.isRunning {
             process.terminate()
         }
-    }
-
-    func returnToConfiguration() {
-        guard !isProcessing else { return }
-        viewState = .configuration
     }
 
     // MARK: - Batch Execution

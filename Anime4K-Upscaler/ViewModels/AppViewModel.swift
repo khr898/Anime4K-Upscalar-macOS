@@ -27,14 +27,41 @@ final class AppViewModel {
     /// Currently selected file ID in the sidebar.
     var selectedFileID: UUID?
 
-    /// Active processing configuration.
+    /// Active (live) processing configuration — the preset for the next enqueued
+    /// batch. Frozen per batch at enqueue time (see `enqueueBatch`).
     var configuration: JobConfiguration = .default
 
-    /// Processing jobs for the current/last batch.
-    var jobs: [ProcessingJob] = []
+    // MARK: - Batch Queue
 
-    /// UI state: whether the configuration panel or processing view is shown.
-    var viewState: ViewState = .configuration
+    /// Queue of batches (frozen preset + jobs) to run sequentially.
+    var batches: [UpscaleBatch] = []
+
+    /// Selected batch in the sidebar; nil => "New Batch" staging detail.
+    var selectedBatchID: UUID?
+
+    /// ID of the batch currently being run (nil when idle).
+    var currentBatchID: UUID?
+
+    /// True while the queue runner is executing batches.
+    private(set) var isQueueProcessing: Bool = false
+
+    /// Whole-queue cancel flag. Per-batch cancel leaves this false so the runner
+    /// continues to the next pending batch. `@ObservationIgnored` — read by the
+    /// runner on the main actor, no view binding needed.
+    @ObservationIgnored private var queueCancelled: Bool = false
+
+    /// Jobs of the currently-selected (or running) batch — view-compat mirror so
+    /// `ProcessingView` reads `viewModel.jobs` unchanged when scoped to a batch.
+    var jobs: [ProcessingJob] {
+        selectedBatch?.jobs ?? currentBatch?.jobs ?? []
+    }
+
+    /// UI state bridge: nil selectedBatchID => configuration/staging detail; a
+    /// selected batch => processing-style detail. Replaced by `selectedBatchID`
+    /// routing in Phase 4; kept computed so existing views compile during migration.
+    var viewState: ViewState {
+        selectedBatchID == nil ? .configuration : .processing
+    }
 
     /// Compression preset for picker binding.
     var compressionPreset: CompressionPreset = .visuallyLossless
@@ -245,18 +272,33 @@ final class AppViewModel {
         }
     }
 
-    // MARK: - Processing
+    // MARK: - Batch Queue Processing
 
-    /// Whether processing can be started.
-    var canStartProcessing: Bool {
-        !files.isEmpty && !engine.isProcessing
+    /// The currently-selected batch (sidebar selection).
+    var selectedBatch: UpscaleBatch? {
+        guard let id = selectedBatchID else { return nil }
+        return batches.first(where: { $0.id == id })
     }
 
-    /// Start processing all files with the current configuration.
-    func startProcessing() {
-        guard canStartProcessing else { return }
+    /// The batch currently being run by the queue runner.
+    var currentBatch: UpscaleBatch? {
+        guard let id = currentBatchID else { return nil }
+        return batches.first(where: { $0.id == id })
+    }
 
-        // Ensure output directory is selected (required for sandbox write access)
+    /// Whether the queue can be started: at least one pending batch and not
+    /// already running. Staging files must be enqueued first (`enqueueBatch`).
+    var canStartProcessing: Bool {
+        batches.contains(where: { $0.state == .pending }) && !isQueueProcessing
+    }
+
+    /// Snapshot the current preset + staging files into a new pending batch and
+    /// append it to the queue. Clears staging. A single file is a valid batch.
+    /// Prompts for an output directory at enqueue time (frozen per batch so
+    /// different batches may target different directories).
+    func enqueueBatch() {
+        guard QueueLogic.canEnqueue(fileCount: files.count) else { return }
+
         if outputDirectoryURL == nil {
             selectOutputDirectory()
             guard outputDirectoryURL != nil else { return }
@@ -264,27 +306,110 @@ final class AppViewModel {
 
         syncCompression()
 
-        // Create jobs for all files
-        jobs = files.map { file in
-            ProcessingJob(file: file, configuration: configuration, outputDirectory: outputDirectoryURL)
+        let config = configuration
+        let outDir = outputDirectoryURL
+        let batchJobs = files.map { file in
+            ProcessingJob(file: file, configuration: config, outputDirectory: outDir)
+        }
+        for job in batchJobs { job.state = .queued }
+
+        let batch = UpscaleBatch(configuration: config, outputDirectory: outDir, jobs: batchJobs)
+        batches.append(batch)
+
+        // Clear staging — files now live on the batch's jobs.
+        files.removeAll()
+        selectedFileID = nil
+        selectedBatchID = batch.id
+    }
+
+    /// Start running the queue (all pending batches, sequentially). Add-while-
+    /// running works: `enqueueBatch` appends during the run and the runner picks
+    /// it up next loop turn.
+    func startProcessing() {
+        executeQueue()
+    }
+
+    /// Run all pending batches in order. `ProcessingEngine` is reused per batch
+    /// with no engine change — its `cancellationRequested` resets at the top of
+    /// each `executeBatch` call, so a per-batch cancel stops the current batch
+    /// and the runner continues; a whole-queue cancel sets `queueCancelled` and
+    /// the runner stops. `// ponytail: single-actor queue, no lock needed`
+    func executeQueue() {
+        guard !isQueueProcessing else { return }
+        Task { await runQueue() }
+    }
+
+    private func runQueue() async {
+        guard !isQueueProcessing else { return }
+        isQueueProcessing = true
+        queueCancelled = false
+
+        while QueueLogic.shouldContinueQueue(queueCancelled: queueCancelled) {
+            guard let idx = QueueLogic.firstPendingBatchIndex(batches.map(\.state)) else { break }
+            let batch = batches[idx]
+            batch.state = .running
+            batch.startedAt = Date()
+            currentBatchID = batch.id
+
+            await engine.executeBatch(jobs: batch.jobs)
+
+            // If not pre-cancelled mid-flight (cancelBatch/cancelAllQueued already
+            // set .cancelled), finalize based on whether this batch was cancelled.
+            if batch.state == .running {
+                let wasCancelled = queueCancelled
+                batch.state = QueueLogic.finalizeBatchState(wasCancelled: wasCancelled)
+            }
+            batch.finishedAt = Date()
+
+            if queueCancelled { break }
         }
 
-        viewState = .processing
+        isQueueProcessing = false
+        currentBatchID = nil
+    }
 
-        Task {
-            await engine.executeBatch(jobs: jobs)
+    /// Cancel one batch. Pending → mark cancelled (runner skips it). Running →
+    /// terminate the current process via `engine.cancelAll()` and mark cancelled;
+    /// `queueCancelled` stays false so the runner continues to the next pending
+    /// batch. Terminal → no-op.
+    func cancelBatch(id: UUID) {
+        guard let batch = batches.first(where: { $0.id == id }) else { return }
+        switch batch.state {
+        case .pending:
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        case .running:
+            engine.cancelAll()
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        default:
+            break
         }
     }
 
-    /// Cancel all processing.
-    func cancelProcessing() {
+    /// Cancel the whole queue: stop the current process and mark every non-
+    /// terminal batch cancelled.
+    func cancelAllQueued() {
+        queueCancelled = true
+        for batch in batches where !batch.state.isTerminal {
+            batch.state = .cancelled
+            for job in batch.jobs where !job.state.isTerminal { job.state = .cancelled }
+        }
         engine.cancelAll()
     }
 
-    /// Reset to configuration view after processing completes.
+    /// Delete a batch from the queue (never the running one). Releases the
+    /// security scope of its files.
+    func deleteBatch(id: UUID) {
+        guard let batch = batches.first(where: { $0.id == id }), batch.isDeletable else { return }
+        for job in batch.jobs { SecurityScopeManager.shared.stopAccessing(job.file.url) }
+        batches.removeAll(where: { $0.id == id })
+        if selectedBatchID == id { selectedBatchID = nil }
+    }
+
+    /// Return to the "New Batch" staging detail.
     func returnToConfiguration() {
-        guard !engine.isProcessing else { return }
-        viewState = .configuration
+        selectedBatchID = nil
     }
 
     // MARK: - Computed Properties
