@@ -112,7 +112,7 @@ enum HDRMode: String, Sendable {
 // MARK: - Compress Configuration
 
 /// User-configurable settings for the Compress feature.
-struct CompressConfiguration: Sendable {
+struct CompressConfiguration: Sendable, Equatable {
     var encoder: CompressEncoder = .hevcVideoToolbox
     var quality: Int = 68
     var contentType: ContentType = .liveAction

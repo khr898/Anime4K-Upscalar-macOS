@@ -286,7 +286,7 @@ enum KeyframeInterval: String, CaseIterable, Identifiable, Sendable {
 
 /// User-configurable settings for stream optimization.
 /// Defaults are tuned for Apple device streaming with quick seeking.
-struct StreamOptimizeConfiguration: Sendable {
+struct StreamOptimizeConfiguration: Sendable, Equatable {
     var encoder: StreamEncoder         = .hevcVideoToolbox
     var quality: Int                   = 65
     var profile: StreamProfile         = .main10
