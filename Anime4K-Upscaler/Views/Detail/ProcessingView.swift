@@ -157,24 +157,23 @@ struct ProcessingView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(job.logLines.enumerated()), id: \.offset) { index, line in
-                            Text(line)
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .id(index)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    // Single Text so the whole log is one selectable/copyable block
+                    // (per-line Texts in a LazyVStack only allow line-by-line selection
+                    // and drop offscreen lines from selection).
+                    Text(job.logLines.joined(separator: "\n"))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .id("logBottom")
                 }
                 .frame(height: 120)
                 .background(Color(.textBackgroundColor).opacity(0.5))
                 .onChange(of: job.logLines.count) {
-                    if let last = job.logLines.indices.last {
-                        proxy.scrollTo(last, anchor: .bottom)
-                    }
+                    proxy.scrollTo("logBottom", anchor: .bottom)
                 }
             }
         }
@@ -214,7 +213,7 @@ struct ProcessingView: View {
             // Action buttons
             if viewModel.engine.isProcessing {
                 Button {
-                    viewModel.cancelProcessing()
+                    viewModel.cancelAllQueued()
                 } label: {
                     Label("Cancel All", systemImage: "stop.fill")
                 }

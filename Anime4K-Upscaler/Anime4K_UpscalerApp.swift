@@ -9,6 +9,25 @@ struct Anime4K_UpscalerApp: App {
     @State private var compressVM = CompressViewModel()
     @State private var streamOptimizeVM = StreamOptimizeViewModel()
 
+    /// True if the currently-active tab's queue is processing.
+    private var activeTabIsQueueProcessing: Bool {
+        switch viewModel.selectedMainTab {
+        case .upscale:        return viewModel.isQueueProcessing
+        case .compress:       return compressVM.isQueueProcessing
+        case .streamOptimize: return streamOptimizeVM.isQueueProcessing
+        }
+    }
+
+    /// Cancel only the active tab's queue (locked decision: app-level cancel is
+    /// per-tab, not global).
+    private func cancelActiveTabQueue() {
+        switch viewModel.selectedMainTab {
+        case .upscale:        viewModel.cancelAllQueued()
+        case .compress:       compressVM.cancelAllQueued()
+        case .streamOptimize: streamOptimizeVM.cancelAllQueued()
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -60,10 +79,10 @@ struct Anime4K_UpscalerApp: App {
                 .disabled(!viewModel.canStartProcessing)
 
                 Button("Cancel Processing") {
-                    viewModel.cancelProcessing()
+                    cancelActiveTabQueue()
                 }
                 .keyboardShortcut(".", modifiers: .command)
-                .disabled(!viewModel.engine.isProcessing)
+                .disabled(!activeTabIsQueueProcessing)
 
                 Divider()
 
@@ -71,7 +90,7 @@ struct Anime4K_UpscalerApp: App {
                     viewModel.returnToConfiguration()
                 }
                 .keyboardShortcut(.escape, modifiers: [])
-                .disabled(viewModel.engine.isProcessing || viewModel.viewState == .configuration)
+                .disabled(activeTabIsQueueProcessing || viewModel.viewState == .configuration)
             }
         }
     }

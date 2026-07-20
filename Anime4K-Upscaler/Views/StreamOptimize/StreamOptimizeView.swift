@@ -2,12 +2,16 @@
 // Complete Stream Optimize feature UI — configurable encoding, directory selection, file list, processing.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct StreamOptimizeView: View {
     @Environment(StreamOptimizeViewModel.self) private var viewModel
 
     var body: some View {
-        Group {
+        NavigationSplitView {
+            StreamOptimizeFileListView()
+                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
+        } detail: {
             switch viewModel.viewState {
             case .configuration:
                 StreamOptimizeConfigView()
@@ -26,6 +30,13 @@ struct StreamOptimizeView: View {
     @ViewBuilder
     private var streamToolbarButtons: some View {
         if viewModel.viewState == .configuration {
+            Button {
+                viewModel.addFiles()
+            } label: {
+                Label("Add Files", systemImage: "plus")
+            }
+            .help("Add video files")
+
             if viewModel.canStartProcessing {
                 Button {
                     viewModel.startProcessing()
@@ -37,7 +48,7 @@ struct StreamOptimizeView: View {
         } else {
             if viewModel.isProcessing {
                 Button {
-                    viewModel.cancelProcessing()
+                    viewModel.cancelAllQueued()
                 } label: {
                     Label("Cancel", systemImage: "stop.fill")
                 }
@@ -109,11 +120,6 @@ private struct StreamOptimizeConfigView: View {
 
                 // Destination Directory
                 destinationSection
-
-                // File List
-                if !viewModel.files.isEmpty {
-                    fileListSection
-                }
 
                 // Start Button
                 startSection
@@ -500,76 +506,6 @@ private struct StreamOptimizeConfigView: View {
         }
     }
 
-    // MARK: - File List Section
-
-    private var fileListSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Label("Found Videos", systemImage: "film.stack")
-                        .font(.headline)
-
-                    Spacer()
-
-                    if let dur = viewModel.totalDuration {
-                        Text(dur)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Text("•")
-                            .font(.caption)
-                            .foregroundStyle(.quaternary)
-                    }
-                    Text(viewModel.totalFileSize)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
-                ScrollView {
-                    LazyVStack(spacing: 2) {
-                        ForEach(viewModel.files) { file in
-                            HStack(spacing: 8) {
-                                Image(systemName: "film")
-                                    .font(.caption)
-                                    .foregroundStyle(.teal)
-                                    .frame(width: 16)
-
-                                Text(file.fileName)
-                                    .font(.system(.callout))
-                                    .lineLimit(1)
-                                    .truncationMode(.middle)
-
-                                Spacer()
-
-                                Text(file.fileExtension.uppercased())
-                                    .font(.caption2)
-                                    .fontWeight(.medium)
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
-                                    .background(.teal.opacity(0.12))
-                                    .foregroundStyle(.teal)
-                                    .clipShape(RoundedRectangle(cornerRadius: 3))
-
-                                Text(file.formattedFileSize)
-                                    .font(.caption2)
-                                    .foregroundStyle(.tertiary)
-
-                                if let dur = file.formattedDuration {
-                                    Text(dur)
-                                        .font(.caption2)
-                                        .foregroundStyle(.tertiary)
-                                }
-                            }
-                            .padding(.vertical, 3)
-                            .padding(.horizontal, 4)
-                        }
-                    }
-                }
-                .frame(maxHeight: 240)
-            }
-            .padding(4)
-        }
-    }
-
     // MARK: - Start Section
 
     private var startSection: some View {
@@ -799,7 +735,7 @@ private struct StreamOptimizeProcessingView: View {
 
             if viewModel.isProcessing {
                 Button {
-                    viewModel.cancelProcessing()
+                    viewModel.cancelAllQueued()
                 } label: {
                     Label("Cancel All", systemImage: "stop.fill")
                 }
@@ -910,5 +846,193 @@ private struct StreamOptimizeJobRow: View {
                 .font(.system(.caption, design: .monospaced, weight: .medium))
                 .foregroundStyle(.secondary)
         }
+    }
+}
+
+// MARK: - File List Sidebar
+
+private struct StreamOptimizeFileListView: View {
+    @Environment(StreamOptimizeViewModel.self) private var viewModel
+    @State private var isDropTargeted: Bool = false
+
+    var body: some View {
+        @Bindable var viewModel = viewModel
+        VStack(spacing: 0) {
+            header
+            Divider()
+            if viewModel.files.isEmpty {
+                placeholder
+            } else {
+                fileList
+            }
+            Divider()
+            footer
+        }
+        .background(.regularMaterial)
+        .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    private var header: some View {
+        HStack {
+            Label("Files", systemImage: "film.stack")
+                .font(.headline)
+                .foregroundStyle(.primary)
+            Spacer()
+            if !viewModel.files.isEmpty {
+                Text("\(viewModel.files.count)")
+                    .font(.caption)
+                    .fontWeight(.medium)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(.quaternary)
+                    .clipShape(Capsule())
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+    }
+
+    private var placeholder: some View {
+        VStack(spacing: 12) {
+            Spacer()
+            Image(systemName: "arrow.down.doc")
+                .font(.system(size: 36))
+                .foregroundStyle(.tertiary)
+            Text("Drop Video Files Here")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Text("or click + to browse")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .strokeBorder(.teal.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .padding(8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fileList: some View {
+        @Bindable var viewModel = viewModel
+        List(selection: $viewModel.selectedFileID) {
+            ForEach(viewModel.files) { file in
+                StreamOptimizeFileRow(file: file)
+                    .tag(file.id)
+                    .contextMenu {
+                        Button("Remove", role: .destructive) {
+                            viewModel.removeFile(id: file.id)
+                        }
+                        Button("Reveal in Finder") {
+                            NSWorkspace.shared.activateFileViewerSelecting([file.url])
+                        }
+                    }
+            }
+        }
+        .listStyle(.sidebar)
+        .overlay {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: 8)
+                    .fill(.teal.opacity(0.08))
+                    .strokeBorder(.teal.opacity(0.4), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .padding(4)
+            }
+        }
+    }
+
+    private var footer: some View {
+        HStack(spacing: 8) {
+            if !viewModel.files.isEmpty {
+                Text(viewModel.totalFileSize)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                if let dur = viewModel.totalDuration {
+                    Text("•").font(.caption2).foregroundStyle(.quaternary)
+                    Text(dur).font(.caption2).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    viewModel.removeAllFiles()
+                } label: {
+                    Image(systemName: "trash")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help("Remove all files")
+            } else {
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var didAdd = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+                    guard let data = data as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil, isAbsolute: true) else { return }
+                    Task { @MainActor in viewModel.addFilesFromDrop([url]) }
+                }
+                didAdd = true
+            }
+        }
+        return didAdd
+    }
+}
+
+private struct StreamOptimizeFileRow: View {
+    let file: VideoFile
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "film")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+                .frame(width: 24)
+
+            VStack(alignment: .leading, spacing: 2) {
+                Text(file.fileName)
+                    .font(.system(.body, design: .default))
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                HStack(spacing: 4) {
+                    Text(file.fileExtension.uppercased())
+                        .font(.caption2)
+                        .fontWeight(.medium)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(.teal.opacity(0.12))
+                        .foregroundStyle(.teal)
+                        .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                    Text(file.formattedFileSize)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+
+                    if let res = file.resolutionString {
+                        Text("•").font(.caption2).foregroundStyle(.quaternary)
+                        Text(res).font(.caption2).foregroundStyle(.tertiary)
+                    }
+
+                    if let dur = file.formattedDuration {
+                        Text("•").font(.caption2).foregroundStyle(.quaternary)
+                        Text(dur).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+            }
+            Spacer()
+        }
+        .padding(.vertical, 2)
     }
 }

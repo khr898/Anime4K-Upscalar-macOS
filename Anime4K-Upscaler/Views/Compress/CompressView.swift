@@ -54,7 +54,7 @@ struct CompressView: View {
         } else {
             if viewModel.isProcessing {
                 Button {
-                    viewModel.cancelProcessing()
+                    viewModel.cancelAllQueued()
                 } label: {
                     Label("Cancel", systemImage: "stop.fill")
                 }
@@ -143,6 +143,7 @@ private struct CompressFileListView: View {
             HStack {
                 Label("Files", systemImage: "film.stack")
                     .font(.headline)
+                    .foregroundStyle(.primary)
                 Spacer()
                 if !viewModel.files.isEmpty {
                     Text("\(viewModel.files.count)")
@@ -177,7 +178,7 @@ private struct CompressFileListView: View {
                 .background {
                     if isDropTargeted {
                         RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(.orange.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                            .strokeBorder(.blue.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .padding(8)
                     }
                 }
@@ -200,8 +201,8 @@ private struct CompressFileListView: View {
                 .overlay {
                     if isDropTargeted {
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(.orange.opacity(0.08))
-                            .strokeBorder(.orange.opacity(0.4), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                            .fill(.blue.opacity(0.08))
+                            .strokeBorder(.blue.opacity(0.4), style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .padding(4)
                     }
                 }
@@ -236,7 +237,7 @@ private struct CompressFileListView: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 6)
         }
-        .background(.background)
+        .background(.regularMaterial)
         .onDrop(of: [.fileURL], isTargeted: $isDropTargeted) { providers in
             handleDrop(providers)
         }
@@ -787,7 +788,7 @@ private struct CompressProcessingView: View {
 
             if viewModel.isProcessing {
                 Button {
-                    viewModel.cancelProcessing()
+                    viewModel.cancelAllQueued()
                 } label: {
                     Label("Cancel All", systemImage: "stop.fill")
                 }

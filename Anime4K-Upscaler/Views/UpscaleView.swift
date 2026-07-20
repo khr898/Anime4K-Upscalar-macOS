@@ -67,7 +67,7 @@ struct UpscaleView: View {
         } else {
             if viewModel.engine.isProcessing {
                 Button {
-                    viewModel.cancelProcessing()
+                    viewModel.cancelAllQueued()
                 } label: {
                     Label("Cancel", systemImage: "stop.fill")
                 }
