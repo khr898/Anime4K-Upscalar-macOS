@@ -42,7 +42,7 @@ struct ProcessingView: View {
     private var processingHeader: some View {
         VStack(spacing: 8) {
             HStack {
-                if viewModel.engine.isProcessing {
+                if viewModel.isQueueProcessing {
                     ProgressView()
                         .controlSize(.small)
                         .padding(.trailing, 2)
@@ -211,7 +211,7 @@ struct ProcessingView: View {
             }
 
             // Action buttons
-            if viewModel.engine.isProcessing {
+            if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {

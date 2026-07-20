@@ -10,16 +10,22 @@ struct CompressView: View {
     var body: some View {
         @Bindable var viewModel = viewModel
         NavigationSplitView {
-            CompressFileListView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
+            BatchQueueSidebar<CompressBatch>(
+                items: viewModel.batches,
+                selection: viewModel.selectedBatchID,
+                onSelect: { viewModel.selectedBatchID = $0 },
+                onCancel: { viewModel.cancelBatch(id: $0) },
+                onDelete: { viewModel.deleteBatch(id: $0) },
+                onNewBatch: { viewModel.returnToConfiguration() },
+                summary: { batch in
+                    "\(batch.configuration.encoder.displayName) · \(batch.configuration.contentType.displayName)"
+                }
+            )
+            .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
             switch viewModel.viewState {
             case .configuration:
-                if viewModel.files.isEmpty {
-                    CompressEmptyStateView()
-                } else {
-                    CompressConfigPanel()
-                }
+                stagingView
             case .processing:
                 CompressProcessingView()
             }
@@ -32,6 +38,73 @@ struct CompressView: View {
         }
     }
 
+    /// Staging detail: preset controls + staging file list + "Add to Queue".
+    @ViewBuilder
+    private var stagingView: some View {
+        if viewModel.files.isEmpty && viewModel.batches.isEmpty {
+            CompressEmptyStateView()
+        } else {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        CompressConfigPanel()
+                        stagingFilesSection
+                    }
+                    .padding(16)
+                }
+                Divider()
+                addToQueueFooter
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stagingFilesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Staging (\(viewModel.files.count))")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    viewModel.addFiles()
+                } label: {
+                    Label("Add Files", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            if viewModel.files.isEmpty {
+                Text("No files staged. Add files to enqueue a batch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                CompressFileListView()
+                    .frame(minHeight: 120, maxHeight: 240)
+            }
+        }
+    }
+
+    private var addToQueueFooter: some View {
+        HStack {
+            if !viewModel.files.isEmpty {
+                Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") ready")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                viewModel.enqueueBatch()
+            } label: {
+                Label("Add to Queue", systemImage: "plus.app")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(viewModel.files.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
     @ViewBuilder
     private var compressToolbarButtons: some View {
         if viewModel.viewState == .configuration {
@@ -40,32 +113,41 @@ struct CompressView: View {
             } label: {
                 Label("Add Files", systemImage: "plus")
             }
-            .help("Add video files")
+            .help("Add video files to staging")
 
             if !viewModel.files.isEmpty {
+                Button {
+                    viewModel.enqueueBatch()
+                } label: {
+                    Label("Add to Queue", systemImage: "plus.app")
+                }
+                .help("Enqueue a batch with the current preset")
+            }
+
+            if viewModel.canStartProcessing {
                 Button {
                     viewModel.startProcessing()
                 } label: {
                     Label("Compress", systemImage: "play.fill")
                 }
-                .help("Start compression")
+                .help("Start processing the queue")
                 .disabled(!viewModel.canStartProcessing)
             }
         } else {
-            if viewModel.isProcessing {
+            if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {
-                    Label("Cancel", systemImage: "stop.fill")
+                    Label("Cancel All", systemImage: "stop.fill")
                 }
-                .help("Cancel compression")
+                .help("Cancel the whole queue")
             } else {
                 Button {
                     viewModel.returnToConfiguration()
                 } label: {
-                    Label("Done", systemImage: "checkmark")
+                    Label("New Batch", systemImage: "square.and.pencil")
                 }
-                .help("Return to configuration")
+                .help("Return to staging")
             }
         }
     }
@@ -641,7 +723,7 @@ private struct CompressProcessingView: View {
     private var processingHeader: some View {
         VStack(spacing: 8) {
             HStack {
-                if viewModel.isProcessing {
+                if viewModel.isQueueProcessing {
                     ProgressView()
                         .controlSize(.small)
                         .padding(.trailing, 2)
@@ -786,7 +868,7 @@ private struct CompressProcessingView: View {
                 }
             }
 
-            if viewModel.isProcessing {
+            if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {

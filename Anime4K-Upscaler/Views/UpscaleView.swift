@@ -1,5 +1,7 @@
 // Anime4K-Upscaler/Views/UpscaleView.swift
 // Root NavigationSplitView layout for the Upscale feature tab.
+// Sidebar = batch queue; detail = staging (config + files + Add to Queue) when
+// no batch is selected, or the selected batch's processing view.
 
 import SwiftUI
 
@@ -9,8 +11,18 @@ struct UpscaleView: View {
     var body: some View {
         @Bindable var viewModel = viewModel
         NavigationSplitView {
-            FileListView()
-                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
+            BatchQueueSidebar<UpscaleBatch>(
+                items: viewModel.batches,
+                selection: viewModel.selectedBatchID,
+                onSelect: { viewModel.selectedBatchID = $0 },
+                onCancel: { viewModel.cancelBatch(id: $0) },
+                onDelete: { viewModel.deleteBatch(id: $0) },
+                onNewBatch: { viewModel.returnToConfiguration() },
+                summary: { batch in
+                    "\(batch.configuration.mode.displayName) · \(batch.configuration.resolution.displayName) · \(batch.configuration.codec.displayName)"
+                }
+            )
+            .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
             detailView
         }
@@ -33,14 +45,77 @@ struct UpscaleView: View {
     private var detailView: some View {
         switch viewModel.viewState {
         case .configuration:
-            if viewModel.files.isEmpty {
-                EmptyStateView()
-            } else {
-                ConfigurationPanel()
-            }
+            stagingView
         case .processing:
             ProcessingView()
         }
+    }
+
+    /// Staging detail: preset controls + staging file list + "Add to Queue".
+    @ViewBuilder
+    private var stagingView: some View {
+        if viewModel.files.isEmpty && viewModel.batches.isEmpty {
+            EmptyStateView()
+        } else {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        ConfigurationPanel()
+                        stagingFilesSection
+                    }
+                    .padding(16)
+                }
+                Divider()
+                addToQueueFooter
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var stagingFilesSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Staging (\(viewModel.files.count))")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    viewModel.addFiles()
+                } label: {
+                    Label("Add Files", systemImage: "plus")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.small)
+            }
+            if viewModel.files.isEmpty {
+                Text("No files staged. Add files to enqueue a batch.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                FileListView()
+                    .frame(minHeight: 120, maxHeight: 240)
+            }
+        }
+    }
+
+    private var addToQueueFooter: some View {
+        HStack {
+            if !viewModel.files.isEmpty {
+                Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") ready")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
+            Button {
+                viewModel.enqueueBatch()
+            } label: {
+                Label("Add to Queue", systemImage: "plus.app")
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.small)
+            .disabled(viewModel.files.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
     }
 
     // MARK: - Toolbar
@@ -53,32 +128,41 @@ struct UpscaleView: View {
             } label: {
                 Label("Add Files", systemImage: "plus")
             }
-            .help("Add video files")
+            .help("Add video files to staging")
 
             if !viewModel.files.isEmpty {
+                Button {
+                    viewModel.enqueueBatch()
+                } label: {
+                    Label("Add to Queue", systemImage: "plus.app")
+                }
+                .help("Enqueue a batch with the current preset")
+            }
+
+            if viewModel.canStartProcessing {
                 Button {
                     viewModel.startProcessing()
                 } label: {
                     Label("Start", systemImage: "play.fill")
                 }
-                .help("Start processing")
+                .help("Start processing the queue")
                 .disabled(!viewModel.canStartProcessing)
             }
         } else {
-            if viewModel.engine.isProcessing {
+            if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {
-                    Label("Cancel", systemImage: "stop.fill")
+                    Label("Cancel All", systemImage: "stop.fill")
                 }
-                .help("Cancel processing")
+                .help("Cancel the whole queue")
             } else {
                 Button {
                     viewModel.returnToConfiguration()
                 } label: {
-                    Label("Done", systemImage: "checkmark")
+                    Label("New Batch", systemImage: "square.and.pencil")
                 }
-                .help("Return to configuration")
+                .help("Return to staging")
             }
         }
     }
