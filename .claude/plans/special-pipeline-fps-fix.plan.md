@@ -31,7 +31,7 @@ This file is the single source of truth. Any AI session can resume by reading th
 | # | Phase | Status | Gate evidence | Notes |
 |---|---|---|---|---|
 | 0 | Probe VTFrameProcessor support on M3 Pro | done | `.claude/plans/phase0-vt-probe.txt` — high-quality isSupported=true, scaleFactors=[4], init OK @1920x1080x4 (video, modelStatus=0=DownloadRequired); low-latency maxDim 960x960 → empty scaleFactors @1080p/720p, [2.0]@640x480 | Low-latency unusable @1080p (expected). High-quality VT SR viable optional quality path @1080px4 (needs model download) → candidate special_VTSR in Phase 5. Proceed to Phase 1. |
-| 1 | MLComputePlan audit of existing models | pending | | |
+| 1 | MLComputePlan audit of existing models | done | `.claude/plans/phase1-computeplan.txt` — ALL 3 models 0 ANE ops, 100% CPU compute. pipersr 138ops/32CPU/0ANE; animevideov3 195ops/42CPU/0ANE (ios17.prelu CPU); realesrgan 1043ops/280CPU/0ANE (ios17.leaky_relu/concat CPU) | Root cause worse than expected: even pipersr (ModelPiper 44fps on ANE) is 100% CPU here → conversion config broken, not just model size. ios17.prelu + ios17.leaky_relu = Phase 7 PReLU→SiLU targets. Phase 2 must fix conversion (deployment target / compute_units / FP16 / opset). |
 | 2 | Re-convert models fixed-large-shape + TensorType | pending | | |
 | 3 | CoreMLUpscaler full-frame + ring + IOSurface + Metal | pending | | |
 | 4 | runANEEncode double-buffered pipeline | pending | | |
