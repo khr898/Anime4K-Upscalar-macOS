@@ -97,22 +97,26 @@ final class CoreMLUpscaler {
     // MARK: - Public entry points
 
     /// Upscale a full frame from a pixel buffer to `targetScale`× the original size.
+    ///
+    /// Hot path for every Special mode (PiperSR / esrgan Fast+Quality / SD-Rescue
+    /// upscale) — all route through here. The previous implementation did, per
+    /// tile: `CIContext.createCGImage` (full-frame rasterize once), then a
+    /// `CIContext.render` to crop the tile into the input buffer, then
+    /// `model.prediction`, then another `CIContext.render` to blit the valid
+    /// region into the output buffer — and every tile ran SERIALLY. For a 1080p
+    /// frame on the 128×128 PiperSR model that is ⌈1920/96⌉×⌈1080/96⌉ = 240
+    /// tiles × ~10ms ANE per-call overhead ≈ 2.4s/frame = 0.4fps, plus 480
+    /// `CIContext.render` round-trips/frame. Two fixes:
+    ///   1. Crop tiles + blit results via direct `CVPixelBuffer` row `memcpy`
+    ///      (no CGImage, no per-tile CIContext.render). One full-frame rasterize
+    ///      gone; 480 GPU renders gone.
+    ///   2. Run the 240 `model.prediction` calls CONCURRENTLY (bounded). ANE
+    ///      pipelines queued predictions; `MLModel.prediction` is thread-safe.
+    /// The tile PLAN (positions + valid regions) is identical to the old code,
+    /// so seam handling is unchanged — only the transport changed.
     func upscale(_ inputBuffer: CVPixelBuffer, targetScale: Int) throws -> CVPixelBuffer {
-        let w = CVPixelBufferGetWidth(inputBuffer)
-        let h = CVPixelBufferGetHeight(inputBuffer)
-        return try upscale(CIImage(cvPixelBuffer: inputBuffer), width: w, height: h, targetScale: targetScale)
-    }
-
-    /// Upscale a full frame from a CIImage (used by the SD-Rescue PNG path) to `targetScale`×.
-    func upscale(_ inputImage: CIImage, width: Int, height: Int, targetScale: Int) throws -> CVPixelBuffer {
-        // Normalize the input to a top-left-origin CGImage so all tiling math is in image space.
-        guard let inputCG = ciContext.createCGImage(
-                inputImage,
-                from: CGRect(x: 0, y: 0, width: width, height: height)) else {
-            throw NSError(domain: "CoreMLUpscaler", code: 500,
-                          userInfo: [NSLocalizedDescriptionKey: "Failed to rasterize input frame."])
-        }
-
+        let width = CVPixelBufferGetWidth(inputBuffer)
+        let height = CVPixelBufferGetHeight(inputBuffer)
         let nativeW = width * nativeScale
         let nativeH = height * nativeScale
         guard let nativeBuffer = Self.makePixelBuffer(nativeW, nativeH) else {
@@ -121,47 +125,56 @@ final class CoreMLUpscaler {
         }
 
         let (tw, th) = chooseTile(width: width, height: height)
-        let stepX = max(1, tw - 2 * overlap)
-        let stepY = max(1, th - 2 * overlap)
 
-        var y = 0
-        while y < height {
-            let topY = min(y, max(0, height - th))
-            var x = 0
-            while x < width {
-                let topX = min(x, max(0, width - tw))
+        // Tile plan (positions + clamped crop sizes + valid regions) factored
+        // into TilePlanner so the edge-clamp + overlap-halo math is unit-tested
+        // (Tests/TilePlannerTests.swift). Deduped by (topX,topY): the step
+        // iteration used to emit clamped duplicates at the far edge that crop,
+        // infer, and blit identical regions — same output, less wasted dispatch.
+        let plans = TilePlanner.plans(frameW: width, frameH: height,
+                                      tileW: tw, tileH: th, overlap: overlap)
 
-                // Crop a tile (with halo, clamped to the frame) from the CGImage (top-left origin).
-                let cropW = min(tw, width - topX)
-                let cropH = min(th, height - topY)
-                guard let tileCG = inputCG.cropping(to: CGRect(x: topX, y: topY, width: cropW, height: cropH)),
-                      let tileInput = Self.makePixelBuffer(tw, th) else { x += stepX; continue }
-                Self.draw(tileCG, into: tileInput, ciContext: ciContext)   // top-left, exact tile size
-
-                // Run the model.
-                let outTile = try infer(tileInput)                          // tw*native × th*native
-
-                // Composite only the clean center region into the native output buffer.
-                let validLeft  = (topX == 0) ? 0 : overlap
-                let validTop   = (topY == 0) ? 0 : overlap
-                let validRight = (topX + tw >= width)  ? cropW : cropW - overlap
-                let validBot   = (topY + th >= height) ? cropH : cropH - overlap
-
-                Self.blit(outTile,
-                          srcRect: CGRect(x: validLeft * nativeScale,
-                                          y: validTop  * nativeScale,
-                                          width:  max(0, (validRight - validLeft)) * nativeScale,
-                                          height: max(0, (validBot   - validTop )) * nativeScale),
-                          into: nativeBuffer,
-                          dstOrigin: CGPoint(x: (topX + validLeft) * nativeScale,
-                                             y: (topY + validTop)  * nativeScale),
-                          ciContext: ciContext)
-                x += stepX
+        // --- Crop all tiles via memcpy from the source CVPixelBuffer (locked once). ---
+        CVPixelBufferLockBaseAddress(inputBuffer, [.readOnly])
+        var tileInputs: [CVPixelBuffer] = []
+        tileInputs.reserveCapacity(plans.count)
+        if let srcBase = CVPixelBufferGetBaseAddress(inputBuffer) {
+            let srcBPR = CVPixelBufferGetBytesPerRow(inputBuffer)
+            for p in plans {
+                guard let tb = Self.makePixelBuffer(tw, th) else { continue }
+                Self.cropMemcpy(srcBase: srcBase, srcBPR: srcBPR,
+                                dst: tb, topX: p.topX, topY: p.topY,
+                                cropW: p.cropW, cropH: p.cropH, tileW: tw, tileH: th)
+                tileInputs.append(tb)
             }
-            y += stepY
         }
+        CVPixelBufferUnlockBaseAddress(inputBuffer, [.readOnly])
 
-        // Resize native → target.
+        // --- Concurrent inference. ANE pipelines queued predictions; prediction
+        // is thread-safe. Bounded so we don't flood the engine past its sweet spot. ---
+        let outTiles = try Self.concurrentInfer(model: model,
+                                                 inputName: inputName, outputName: outputName,
+                                                 inputs: tileInputs,
+                                                 maxConcurrent: Self.inferConcurrency)
+
+        // --- Blit valid regions via memcpy into the native output buffer (locked once). ---
+        CVPixelBufferLockBaseAddress(nativeBuffer, [])
+        if let dstBase = CVPixelBufferGetBaseAddress(nativeBuffer) {
+            let dstBPR = CVPixelBufferGetBytesPerRow(nativeBuffer)
+            for (i, p) in plans.enumerated() where i < outTiles.count {
+                guard let outTile = outTiles[i], p.validW > 0, p.validH > 0 else { continue }
+                Self.blitMemcpy(src: outTile,
+                                srcRectX: p.validLeft * nativeScale,
+                                srcRectY: p.validTop * nativeScale,
+                                rectW: p.validW * nativeScale, rectH: p.validH * nativeScale,
+                                dst: nativeBuffer, dstBase: dstBase, dstBPR: dstBPR,
+                                dstOriginX: (p.topX + p.validLeft) * nativeScale,
+                                dstOriginY: (p.topY + p.validTop) * nativeScale)
+            }
+        }
+        CVPixelBufferUnlockBaseAddress(nativeBuffer, [])
+
+        // Resize native → target (one CIContext.render for the whole frame — kept).
         if targetScale == nativeScale { return nativeBuffer }
         let factor = Double(targetScale) / Double(nativeScale)
         let resized = CIImage(cvPixelBuffer: nativeBuffer)
@@ -182,53 +195,113 @@ final class CoreMLUpscaler {
         return tiles.last ?? (160, 90)
     }
 
-    private func infer(_ pixelBuffer: CVPixelBuffer) throws -> CVPixelBuffer {
-        let input = try MLDictionaryFeatureProvider(
-            dictionary: [inputName: MLFeatureValue(pixelBuffer: pixelBuffer)])
-        let out = try model.prediction(from: input)
-        guard let buf = out.featureValue(for: outputName)?.imageBufferValue else {
-            throw NSError(domain: "CoreMLUpscaler", code: 500,
-                          userInfo: [NSLocalizedDescriptionKey: "Model produced no output frame."])
+    /// Max concurrent `model.prediction` calls. ANE pipelines queued work but
+    /// floods past ~8 in flight just add context-switch + memory pressure for
+    /// tiny 128×128 tiles. Bounded by a semaphore in `concurrentInfer`.
+    /// ponytail: fixed 8 — if a future model shows better throughput at higher
+    /// fan-out, make this adaptive on model+tile size.
+    private static let inferConcurrency = 8
+
+    /// Run `model.prediction` over `inputs` concurrently, bounded by
+    /// `maxConcurrent`. `MLModel.prediction` is documented thread-safe; the ANE
+    /// driver pipelines queued predictions so the per-call fixed latency
+    /// (~5–10ms for a tiny tile, dominated by submission overhead, not compute)
+    /// overlaps across tiles instead of serializing 240 calls back-to-back.
+    /// Returns one (possibly nil) output per input, in order. First error wins.
+    private static func concurrentInfer(model: MLModel,
+                                        inputName: String, outputName: String,
+                                        inputs: [CVPixelBuffer],
+                                        maxConcurrent: Int) throws -> [CVPixelBuffer?] {
+        var outputs = [CVPixelBuffer?](repeating: nil, count: inputs.count)
+        let sem = DispatchSemaphore(value: maxConcurrent)
+        let errorBox = ErrorBox()
+        DispatchQueue.concurrentPerform(iterations: inputs.count) { i in
+            guard errorBox.message == nil else { return }
+            sem.wait()
+            defer { sem.signal() }
+            guard errorBox.message == nil else { return }
+            do {
+                let input = try MLDictionaryFeatureProvider(
+                    dictionary: [inputName: MLFeatureValue(pixelBuffer: inputs[i])])
+                let out = try model.prediction(from: input)
+                outputs[i] = out.featureValue(for: outputName)?.imageBufferValue
+            } catch {
+                errorBox.set(error.localizedDescription)
+            }
         }
-        return buf
+        if let msg = errorBox.message {
+            throw NSError(domain: "CoreMLUpscaler", code: 500,
+                          userInfo: [NSLocalizedDescriptionKey: msg])
+        }
+        return outputs
+    }
+
+    /// Lock-protected single-writer box for the first inference error, readable
+    /// as a cheap stop flag from concurrentPerform iterations. Plain mutex — not
+    /// on the hot path (only fires on failure).
+    private final class ErrorBox {
+        private let lock = NSLock()
+        private var _msg: String?
+        var message: String? { lock.lock(); defer { lock.unlock() }; return _msg }
+        func set(_ msg: String) { lock.lock(); if _msg == nil { _msg = msg }; lock.unlock() }
+    }
+
+    /// Crop a `cropW × cropH` region from the source buffer (top-left origin,
+    /// BGRA) into the top-left of a `tileW × tileH` destination tile buffer.
+    /// Direct row memcpy — no CGImage, no CIContext.render. Margin outside the
+    /// crop (right/bottom on edge tiles) is left as-is; the valid-region blit
+    /// excludes it, matching the old `draw` semantics. `srcBase`/`srcBPR` come
+    /// from a `CVPixelBufferLockBaseAddress` the caller owns.
+    private static func cropMemcpy(srcBase: UnsafeMutableRawPointer, srcBPR: Int,
+                                   dst: CVPixelBuffer,
+                                   topX: Int, topY: Int, cropW: Int, cropH: Int,
+                                   tileW: Int, tileH: Int) {
+        CVPixelBufferLockBaseAddress(dst, [])
+        defer { CVPixelBufferUnlockBaseAddress(dst, []) }
+        guard let dstBase = CVPixelBufferGetBaseAddress(dst) else { return }
+        let dstBPR = CVPixelBufferGetBytesPerRow(dst)
+        let rowBytes = cropW * 4
+        for row in 0..<cropH {
+            let src = srcBase.advanced(by: (topY + row) * srcBPR + topX * 4)
+            let dstRow = dstBase.advanced(by: row * dstBPR)
+            memcpy(dstRow, src, rowBytes)
+        }
+    }
+
+    /// Blit a `rectW × rectH` region (BGRA) from `src` at `(srcRectX, srcRectY)`
+    /// (top-left origin) into `dst` at `(dstOriginX, dstOriginY)`. Direct row
+    /// memcpy. `dstBase`/`dstBPR` come from a `CVPixelBufferLockBaseAddress` the
+    /// caller owns on `dst`; `src` is locked internally.
+    private static func blitMemcpy(src: CVPixelBuffer,
+                                   srcRectX: Int, srcRectY: Int, rectW: Int, rectH: Int,
+                                   dst: CVPixelBuffer, dstBase: UnsafeMutableRawPointer, dstBPR: Int,
+                                   dstOriginX: Int, dstOriginY: Int) {
+        CVPixelBufferLockBaseAddress(src, [.readOnly])
+        defer { CVPixelBufferUnlockBaseAddress(src, [.readOnly]) }
+        guard let srcBase = CVPixelBufferGetBaseAddress(src) else { return }
+        let srcBPR = CVPixelBufferGetBytesPerRow(src)
+        let rowBytes = rectW * 4
+        for row in 0..<rectH {
+            let s = srcBase.advanced(by: (srcRectY + row) * srcBPR + srcRectX * 4)
+            let d = dstBase.advanced(by: (dstOriginY + row) * dstBPR + dstOriginX * 4)
+            memcpy(d, s, rowBytes)
+        }
     }
 
     private static func makePixelBuffer(_ w: Int, _ h: Int) -> CVPixelBuffer? {
         var pb: CVPixelBuffer?
+        // IOSurface-backed + Metal-compatible so the output buffer can hand off
+        // to a Metal blit/encode pass zero-copy (Phase 4 ring + Phase 3 Metal
+        // convert path). IOSurface backing is required for CVPixelBuffer→MTLTexture
+        // sharing; without it the Metal path falls back to a host-memory copy.
         let attrs = [
             kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue!,
             kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue!,
-            kCVPixelBufferMetalCompatibilityKey: kCFBooleanTrue!
+            kCVPixelBufferMetalCompatibilityKey: kCFBooleanTrue!,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
         ] as CFDictionary
         guard CVPixelBufferCreate(kCFAllocatorDefault, w, h,
                                   kCVPixelFormatType_32BGRA, attrs, &pb) == kCVReturnSuccess else { return nil }
         return pb
-    }
-
-    private static func draw(_ cg: CGImage, into buffer: CVPixelBuffer, ciContext: CIContext) {
-        // Render a CGImage into an exact-size buffer at top-left origin.
-        let img = CIImage(cgImage: cg)
-        let w = CVPixelBufferGetWidth(buffer), h = CVPixelBufferGetHeight(buffer)
-        // CIImage(cgImage:) is already top-left oriented for CIContext.render bounds below.
-        ciContext.render(img, to: buffer, bounds: CGRect(x: 0, y: 0, width: w, height: h), colorSpace: nil)
-    }
-
-    private static func blit(_ src: CVPixelBuffer, srcRect: CGRect,
-                             into dst: CVPixelBuffer, dstOrigin: CGPoint, ciContext: CIContext) {
-        guard srcRect.width > 0, srcRect.height > 0 else { return }
-        let srcImg = CIImage(cvPixelBuffer: src)
-        let dstH = CGFloat(CVPixelBufferGetHeight(dst))
-        // Convert top-left coords to CIImage (bottom-left) space for the destination render bounds.
-        let cropped = srcImg.cropped(to: CGRect(
-            x: srcRect.origin.x,
-            y: CGFloat(CVPixelBufferGetHeight(src)) - srcRect.origin.y - srcRect.height,
-            width: srcRect.width, height: srcRect.height))
-        let dy = dstH - dstOrigin.y - srcRect.height
-        let placed = cropped.transformed(by: CGAffineTransform(
-            translationX: dstOrigin.x - srcRect.origin.x,
-            y: dy - (CGFloat(CVPixelBufferGetHeight(src)) - srcRect.origin.y - srcRect.height)))
-        ciContext.render(placed, to: dst,
-                         bounds: CGRect(x: dstOrigin.x, y: dy, width: srcRect.width, height: srcRect.height),
-                         colorSpace: nil)
     }
 }
