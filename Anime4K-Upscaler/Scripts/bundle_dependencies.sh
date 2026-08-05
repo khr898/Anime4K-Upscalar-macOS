@@ -9,11 +9,7 @@ set -euo pipefail
 FRAMEWORKS_DIR="${BUILT_PRODUCTS_DIR}/${FRAMEWORKS_FOLDER_PATH}"
 RESOURCES_DIR="${BUILT_PRODUCTS_DIR}/${UNLOCALIZED_RESOURCES_FOLDER_PATH}"
 SHADERS_SRC="${SRCROOT}/Anime4K-Upscaler/Resources/Shaders"
-VENDORED_LIB_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredDylibs"
-VENDORED_LIBPLACEBO="$(ls "${VENDORED_LIB_DIR}"/libplacebo.*.dylib 2>/dev/null | head -1)"
 VENDORED_TOOLS_DIR="${SRCROOT}/Anime4K-Upscaler/Resources/VendoredTools"
-VENDORED_FFMPEG="${VENDORED_TOOLS_DIR}/ffmpeg"
-VENDORED_FFPROBE="${VENDORED_TOOLS_DIR}/ffprobe"
 
 case "${A4K_SKIP_ADHOC_SIGNING:-0}" in
     1|true|TRUE|yes|YES)
@@ -27,141 +23,97 @@ esac
 mkdir -p "${FRAMEWORKS_DIR}"
 mkdir -p "${RESOURCES_DIR}/Shaders"
 
-# --- 0. INSTALL MOLTENVK IF MISSING ---
+# --- 0. ENSURE libplacebo + MoltenVK + libdav1d are latest (Homebrew) ---
+# libplacebo 360.0 had an intermittent color-patch bug in custom_shader
+# dispatch, fixed in 360.1. MoltenVK must be latest for matching Vulkan
+# behavior. libdav1d (Homebrew formula `dav1d`) is the software AV1 decoder
+# the from-source ffmpeg is configured with (--enable-libdav1d). Install if
+# missing and UPGRADE every build so the bottles stay current — permanent,
+# not a one-off. Not pinned: `brew upgrade` pulls the latest stable.
+# libplacebo is sourced from Homebrew only (the vendored libplacebo.351.dylib
+# is removed from the repo).
+#
+# CRITICAL: the dylib refresh in copy_dylibs_recursive relies on this step
+# actually pulling the newest bottles — if `brew upgrade` is skipped, the
+# bundled libplacebo stays at the old (color-patch) version even though the
+# copy-refresh re-copies it, because the source it copies from is still old.
 if command -v brew >/dev/null 2>&1; then
-    if ! brew list molten-vk >/dev/null 2>&1; then
-        echo "🍺 Installing molten-vk via Homebrew..."
-        brew install molten-vk
-    fi
+    echo "🍺 Ensuring libplacebo + molten-vk + dav1d are latest via Homebrew..."
+    brew install libplacebo molten-vk dav1d 2>/dev/null || true
+    brew upgrade libplacebo molten-vk dav1d 2>/dev/null || true
+    echo "   libplacebo: $(brew list --versions libplacebo 2>/dev/null | awk '{print $2}')"
+    echo "   molten-vk:  $(brew list --versions molten-vk 2>/dev/null | awk '{print $2}')"
+    echo "   dav1d:      $(brew list --versions dav1d 2>/dev/null | awk '{print $2}')"
 fi
 
 build_custom_ffmpeg() {
-    echo "🛠️  Building custom FFmpeg with Vulkan and libplacebo..."
-    local temp_build_dir="${SRCROOT}/ffmpeg_build"
+    echo "🛠️  Building custom FFmpeg with Vulkan, libplacebo (>=7.360.1), and libdav1d..."
+    temp_build_dir="${SRCROOT}/ffmpeg_build"
     mkdir -p "$temp_build_dir"
     cd "$temp_build_dir"
-    
+
     if [[ ! -d "ffmpeg" ]]; then
         git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
     fi
     cd ffmpeg
-    
+
+    # --enable-libplacebo: compiles against the Homebrew libplacebo (>=7.360.1)
+    # headers so the binary and the shipped dylib share one ABI (360). The 360.0
+    # color-patch bug in custom_shader dispatch is fixed in 360.1.
+    # --enable-libdav1d: software AV1 decoder (fallback for devices without AV1
+    # VideoToolbox decode — Intel / M1 / M2). The native `av1` decoder is
+    # hardware-only, so without libdav1d AV1 sources decode to zero frames and
+    # the Special (Core ML) pipeline fails. VideoToolbox AV1 hwaccel is also
+    # compiled in (autodetected on macOS) for Apple Silicon that supports it.
     ./configure \
         --prefix="${temp_build_dir}/dist" \
         --enable-vulkan \
         --enable-libplacebo \
+        --enable-libdav1d \
         --enable-gpl \
         --enable-nonfree \
         --disable-shared \
         --enable-static
-    make -j$(sysctl -n hw.ncpu)
-    make install
-    
-    FFMPEG_BIN="${temp_build_dir}/dist/bin/ffmpeg"
-    FFPROBE_BIN="${temp_build_dir}/dist/bin/ffprobe"
+    # Build only the executables. `make install` (and a full `make`) fail on the
+    # libavfilter.a static-archive step (metal filter objects), but the ffmpeg/
+    # ffprobe binaries link the object files directly and build cleanly — and
+    # the bundler only needs the binaries, not the static archives.
+    make -j$(sysctl -n hw.ncpu) ffmpeg ffprobe
+
+    FFMPEG_BIN="${temp_build_dir}/ffmpeg/ffmpeg"
+    FFPROBE_BIN="${temp_build_dir}/ffmpeg/ffprobe"
     cd "${SRCROOT}"
 }
 
-# --- 1. LOCATE FFMPEG & FFPROBE ---
-FFMPEG_BIN=""
-FFPROBE_BIN=""
+# --- 1. BUILD FFMPEG + FFPROBE (against Homebrew libplacebo >=7.360.1) ---
+# Always build from source so the binary is compiled against the latest
+# libplacebo headers — the shipped dylib and the binary then share one ABI
+# (360). The vendored libplacebo.351.dylib is removed; vendored/DMG/prebuilt
+# ffmpegs ship unknown libplacebo ABIs (351 vs 360 mismatch caused the
+# intermittent color patches) and are no longer used. `build_custom_ffmpeg`
+# is idempotent: clones only if absent, `make` is a no-op if already built.
+build_custom_ffmpeg
 
-# 1a. Check if we already have a fully functioning vendored ffmpeg
-if [[ -x "$VENDORED_FFMPEG" && -x "$VENDORED_FFPROBE" ]]; then
-    # Test if it runs. If it fails due to dyld (missing libavdevice/etc.), we can try downloading it.
-    if "$VENDORED_FFMPEG" -version >/dev/null 2>&1; then
-        FFMPEG_BIN="$VENDORED_FFMPEG"
-        FFPROBE_BIN="$VENDORED_FFPROBE"
-        echo "📦 Using working vendored ffmpeg tools from: $VENDORED_TOOLS_DIR"
-    fi
-fi
-
-# 1b. If not found or not working, check device's system/homebrew ffmpeg
-if [[ -z "$FFMPEG_BIN" ]]; then
-    BREW_FFMPEG_PREFIX=""
-    if command -v brew >/dev/null 2>&1; then
-        BREW_FFMPEG_PREFIX=$(brew --prefix ffmpeg 2>/dev/null || true)
-    fi
-
-    CANDIDATE_FFMPEG=""
-    CANDIDATE_FFPROBE=""
-    if [[ -n "$BREW_FFMPEG_PREFIX" && -x "$BREW_FFMPEG_PREFIX/bin/ffmpeg" ]]; then
-        CANDIDATE_FFMPEG="$BREW_FFMPEG_PREFIX/bin/ffmpeg"
-        CANDIDATE_FFPROBE="$BREW_FFMPEG_PREFIX/bin/ffprobe"
-    else
-        CANDIDATE_FFMPEG=$(command -v ffmpeg 2>/dev/null || echo "/opt/homebrew/bin/ffmpeg")
-        CANDIDATE_FFPROBE=$(command -v ffprobe 2>/dev/null || echo "/opt/homebrew/bin/ffprobe")
-    fi
-
-    # Check if the device candidate actually supports libplacebo
-    if [[ -x "$CANDIDATE_FFMPEG" ]] && otool -L "$CANDIDATE_FFMPEG" 2>/dev/null | grep -q "libplacebo"; then
-        FFMPEG_BIN="$CANDIDATE_FFMPEG"
-        FFPROBE_BIN="$CANDIDATE_FFPROBE"
-        echo "📦 Using device ffmpeg with libplacebo from: $FFMPEG_BIN"
-    fi
-fi
-
-# 1c. If still not found, download the prebuilt binaries from the release DMG
-if [[ -z "$FFMPEG_BIN" ]]; then
-    echo "📥 No working ffmpeg with libplacebo found. Downloading from release..."
-    mkdir -p "${VENDORED_TOOLS_DIR}"
-    
-    # Download DMG
-    DMG_PATH="/tmp/Anime4K_Upscaler_download.dmg"
-    curl -L -o "$DMG_PATH" "https://github.com/khr898/Anime4K-Upscalar-macOS/releases/download/v1.1.07042026/Anime4K_Upscaler_v1.1.07042026_arm64.dmg"
-    
-    # Mount DMG
-    MNT_DIR="/tmp/mnt_anime4k_download"
-    mkdir -p "$MNT_DIR"
-    hdiutil attach "$DMG_PATH" -mountpoint "$MNT_DIR" -nobrowse -quiet
-    
-    # Extract
-    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/ffmpeg" "${VENDORED_FFMPEG}"
-    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/ffprobe" "${VENDORED_FFPROBE}"
-    
-    # Also extract the libplacebo that matches it to the vendored dylibs dir
-    # (any ABI the DMG ships — not pinned to a specific version)
-    mkdir -p "${VENDORED_LIB_DIR}"
-    cp -f "$MNT_DIR/Anime4K Upscaler.app/Contents/Frameworks/"libplacebo.*.dylib "${VENDORED_LIB_DIR}/"
-    VENDORED_LIBPLACEBO="$(ls "${VENDORED_LIB_DIR}"/libplacebo.*.dylib 2>/dev/null | head -1)"
-    
-    # Detach and clean up
-    hdiutil detach "$MNT_DIR" -quiet
-    rm -rf "$MNT_DIR" "$DMG_PATH"
-    
-    chmod +x "${VENDORED_FFMPEG}" "${VENDORED_FFPROBE}"
-    
-    FFMPEG_BIN="$VENDORED_FFMPEG"
-    FFPROBE_BIN="$VENDORED_FFPROBE"
-    echo "✅ Downloaded and prepared vendored ffmpeg."
+if [[ ! -x "$FFMPEG_BIN" || ! -x "$FFPROBE_BIN" ]]; then
+    echo "error: custom ffmpeg build did not produce binaries at $FFMPEG_BIN"
+    exit 1
 fi
 
 echo "📦 Bundling ffmpeg from: $FFMPEG_BIN"
 echo "📦 Bundling ffprobe from: $FFPROBE_BIN"
 
-# Check libplacebo-backed ffmpeg using linkage checks
+# Sanity: built ffmpeg must link libplacebo (not pinned to a version —
+# `brew upgrade` in Step 0 keeps it at latest stable, currently 7.360.1).
 PLACEBO_ABI=$(otool -L "$FFMPEG_BIN" 2>/dev/null | sed -n 's/.*libplacebo\.\([0-9][0-9]*\)\.dylib.*/\1/p' | head -1)
 if [[ -z "$PLACEBO_ABI" ]]; then
     if otool -L "$FFMPEG_BIN" 2>/dev/null | grep -q "libplacebo"; then
         PLACEBO_ABI="dylib"
     else
-        echo "error: selected ffmpeg is not linked against libplacebo"
+        echo "error: built ffmpeg is not linked against libplacebo."
         exit 1
     fi
 fi
-echo "✅ Using libplacebo ABI/suffix: $PLACEBO_ABI"
-
-# Verify if libplacebo is linked against libMoltenVK or if Vulkan support is present
-if [[ "$FFMPEG_BIN" != "$VENDORED_FFMPEG" ]]; then
-    if ! otool -L "$FFMPEG_BIN" 2>/dev/null | grep -qi "MoltenVK"; then
-        echo "⚠️  Selected ffmpeg does not show direct MoltenVK linkage."
-        # If Homebrew ffmpeg lacks Vulkan/MoltenVK support, build custom fallback
-        if [[ "${BREW_FFMPEG_PREFIX:-}" != "" ]]; then
-            echo "⚠️  Homebrew ffmpeg might lack Vulkan support. Attempting custom build fallback..."
-            build_custom_ffmpeg
-        fi
-    fi
-fi
+echo "✅ Built ffmpeg links libplacebo.$PLACEBO_ABI"
 
 # --- 2. COPY BINARIES ---
 cp -f "$FFMPEG_BIN" "${FRAMEWORKS_DIR}/ffmpeg"
@@ -191,9 +143,8 @@ should_skip_dylib() {
     return 1
 }
 
-# Search paths for resolving @rpath references (prefer vendored dylibs first)
+# Search paths for resolving @rpath references
 SEARCH_LIB_DIRS=(
-    "$VENDORED_LIB_DIR"
     "/opt/homebrew/lib"
     "/usr/local/lib"
 )
@@ -317,15 +268,29 @@ copy_dylibs_recursive() {
             fi
         fi
 
-        if [[ ! -f "$dest" ]]; then
-            if [[ -z "$actual_path" || ! -f "$actual_path" ]]; then
-                echo "  ⚠️  Skipping (not found): $dep_name"
-                continue
+        # Refresh from Homebrew when the source bottle differs from what's
+        # bundled — a `brew upgrade` (Step 0) to a newer libplacebo/MoltenVK
+        # bottle MUST actually replace the bundled dylib. The previous
+        # `! -f "$dest"` guard copied each dylib ONCE and never refreshed, so a
+        # libplacebo 360.0→360.1 upgrade (360.0 had the custom_shader
+        # color-patch bug, fixed in 360.1) never reached the bundle and the
+        # stale 360.0 dylib shipped indefinitely → persistent color patches.
+        # `cmp -s` on the raw Homebrew source vs the bundled (relinked) copy
+        # returns "differ" whenever the source changed OR the dest was relinked
+        # — either way we re-copy and let step 4 re-fix install names/refs (it
+        # already runs on every dylib each build). Cheap: short-circuits on the
+        # first differing byte. Recurse so a newer bottle's transitive deps are
+        # pulled too.
+        if [[ -z "$actual_path" || ! -f "$actual_path" ]]; then
+            echo "  ⚠️  Skipping (not found): $dep_name"
+        elif [[ ! -f "$dest" ]] || ! cmp -s "$actual_path" "$dest" 2>/dev/null; then
+            if [[ ! -f "$dest" ]]; then
+                echo "  📎 Copying: $dep_name"
+            else
+                echo "  🔄 Refreshing (Homebrew upgrade): $dep_name"
             fi
-            echo "  📎 Copying: $dep_name"
             cp -f "$actual_path" "$dest"
             chmod 644 "$dest"
-            # Recurse into this dylib's dependencies
             copy_dylibs_recursive "$dest" $((depth + 1))
         fi
 
@@ -339,14 +304,6 @@ copy_dylibs_recursive "${FRAMEWORKS_DIR}/ffmpeg"
 
 echo "🔗 Resolving dylib dependencies for ffprobe..."
 copy_dylibs_recursive "${FRAMEWORKS_DIR}/ffprobe"
-
-if [[ -f "$VENDORED_LIBPLACEBO" ]]; then
-    echo "📦 Using vendored libplacebo from: $VENDORED_LIBPLACEBO"
-    placebo_name=$(basename "$VENDORED_LIBPLACEBO")
-    cp -f "$VENDORED_LIBPLACEBO" "${FRAMEWORKS_DIR}/$placebo_name"
-    chmod 644 "${FRAMEWORKS_DIR}/$placebo_name"
-    install_name_tool -id "@executable_path/../Frameworks/$placebo_name" "${FRAMEWORKS_DIR}/$placebo_name" 2>/dev/null || true
-fi
 
 relink_libplacebo_refs "${FRAMEWORKS_DIR}/ffmpeg"
 relink_libplacebo_refs "${FRAMEWORKS_DIR}/ffprobe"

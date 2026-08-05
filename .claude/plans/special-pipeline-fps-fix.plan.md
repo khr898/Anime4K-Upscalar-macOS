@@ -32,13 +32,20 @@ This file is the single source of truth. Any AI session can resume by reading th
 |---|---|---|---|---|
 | 0 | Probe VTFrameProcessor support on M3 Pro | done | `.claude/plans/phase0-vt-probe.txt` — high-quality isSupported=true, scaleFactors=[4], init OK @1920x1080x4 (video, modelStatus=0=DownloadRequired); low-latency maxDim 960x960 → empty scaleFactors @1080p/720p, [2.0]@640x480 | Low-latency unusable @1080p (expected). High-quality VT SR viable optional quality path @1080px4 (needs model download) → candidate special_VTSR in Phase 5. Proceed to Phase 1. |
 | 1 | MLComputePlan audit of existing models | done | `.claude/plans/phase1-computeplan.txt` — ALL 3 models 0 ANE ops, 100% CPU compute. pipersr 138ops/32CPU/0ANE; animevideov3 195ops/42CPU/0ANE (ios17.prelu CPU); realesrgan 1043ops/280CPU/0ANE (ios17.leaky_relu/concat CPU) | Root cause worse than expected: even pipersr (ModelPiper 44fps on ANE) is 100% CPU here → conversion config broken, not just model size. ios17.prelu + ios17.leaky_relu = Phase 7 PReLU→SiLU targets. Phase 2 must fix conversion (deployment target / compute_units / FP16 / opset). |
-| 2 | Re-convert models fixed-large-shape + TensorType | pending | | |
+| 2 | Re-convert models fixed-large-shape + TensorType | blocked | Config fix applied (TensorType out + FP16 + fixed shape + CPU_AND_NE + macOS14) and verified in `.claude/plans/models-v2/`, but **0-CPU-fallback gate UNVERIFIABLE in this env**: host is a Parallels macOS VM (VirtualMac2,1, M3 Pro Virtual, `hv_vmm_present=1`) — Apple Virtualization framework does NOT pass ANE through to guest. Every model (incl. a pure 3-conv net) audits 0 ANE / 100% CPU. Phase 1's "100% CPU" is a VM artifact, not a config bug. Full evidence + web refs: `.claude/plans/phase2-findings.md`. Must re-run `MLComputePlanAudit` + Phase 6 fps gates on bare-metal host macOS to validate. | Conversion config is still correct for real hardware — keep + promote. Phase 3/4/5 Swift pipeline work can proceed in VM (build + unit tests); ANE-placement + fps gates defer to host. |
 | 3 | CoreMLUpscaler full-frame + ring + IOSurface + Metal | pending | | |
 | 4 | runANEEncode double-buffered pipeline | pending | | |
 | 5 | Add new presets (MetalFX, Hybrid, Neural2x, PiperSR-2pass) | pending | | |
 | 6 | Swift benchmark harness + MLComputePlan CI | pending | | |
 | 7 | Op-placement + compute_precision audit fixes | pending | | |
 | 8 | Optional: distill animevideov3 / RRDB prune | pending | | |
+| 9 | N1: Temporal redundancy skip (anime dup-frame reuse) | pending | RED test written `Tests/FrameRedundancyTests.swift` (parked artifact, compile-time RED — `FrameRedundancyCache` not yet impl) | Paused per user "do not start from the new phases" — resume Phase 3 first. Biggest anime-specific win. Standalone swiftc tests mirror FrameAccumulator. |
+
+> **Side-fix done 2026-08-05 (not a plan phase):** persistent pure-Anime4K color-patch bug fixed. Root cause = `copy_dylibs_recursive` `! -f` guard defeated Step 0 `brew upgrade` → bundled libplacebo 360.0 never replaced by 360.1. Fix = refresh-on-`cmp -s`-differ in `bundle_dependencies.sh` + `dav1d` added to Step 0 (was wrongly `libdav1d`) + `.github/workflows/build.yml` rewritten to `brew update`/`install`/`upgrade` libplacebo+molten-vk+dav1d every run + CI libplacebo validation strengthened (size + mtime, since soname 360 is identical for 360.0/360.1). Verified: rebuild logged `🔄 Refreshing (Homebrew upgrade): libplacebo.360.dylib`, bundled dylib size 957792 == Homebrew 7.360.1 bottle, BUILD SUCCEEDED. Full entry in `PIPELINE_AUDIT.md` § 2026-08-05. Residual: `Resources/VendoredTools/` stale ffmpeg/ffprobe (group-only, not bundled, safe to delete later).
+| 10 | N2: Metal 4 GPU-timeline SR (MTLTensor + MTL4MachineLearningCommandEncoder) | pending | | New tech WWDC25 S262. macOS 26 gate, ANE fallback. |
+| 11 | N3: Frame interpolation (Metal 4 Frame Interpolator / ffmpeg mestimate) | pending | | Optional. Output-fps multiplier, not resolution. |
+| 12 | N4: Stateful recurrent VSR (MLState, BasicVSR-style) | pending | | Optional. ANE 1-2 StateType limit; GPU-timeline host. |
+| 13 | N5: Real-CUGAN ncnn-vulkan preset | pending | | Optional. App already bundles ncnn infra. |
 
 **Status values:** `pending` | `in_progress` | `done` | `blocked` | `skipped` (with reason).
 
@@ -111,6 +118,14 @@ Targets are gates. A preset that misses its target is not "done" — investigate
 
 ### E. SDRescue specifics
 - Anime4K Restore VL GLSL shader runs in the ffmpeg decode filter chain (GPU). The ring pipeline overlaps GPU-restore of frame N+1 with ANE-upscale of frame N — decode stage is already separate from ANE stage. → Phase 4 handles this automatically; no extra work beyond using the B1 animevideov3 model.
+
+### F. New levers (2026-08-05 research, folded into Phases 9–13)
+
+- **N1 — Temporal redundancy skip (anime-specific, biggest win).** Anime = limited animation; 24fps container often holds ≤12fps unique art frames → ~50% duplicate/near-duplicate frames. Current pipeline runs full ANE infer + blit + encode on every container frame. Detect dups cheaply in decode (downsampled-luma signature + Hamming/SAD vs prev), reuse the previous upscaled `CVPixelBuffer` with a new PTS, skip infer+blit entirely. FAST_Anime_VSR's "video redundancy jump" + momentum mechanism does exactly this and hits real-time on consumer GPUs. Boosted VSR (arXiv 2207.08674) finds ~70% of patches in public video are temporally redundant; Real-Time VSR RAI (Sensors 23:7880) caches/reuses intermediate features for 101ms→39ms. 3DSRnet (arXiv 1812.09079) adds scene-change detection (2-layer net, 99.89% acc) to avoid propagating a cross-scene frame. → Phase 9. Pure-Foundation `FrameRedundancyCache` (no AVFoundation dep), unit-tested standalone via swiftc mirroring `FrameAccumulator`. Est. ~1.5–2.2× effective fps on typical anime.
+- **N2 — Metal 4 GPU-timeline SR (new tech, WWDC25 S262).** `MTL4MachineLearningCommandEncoder` + `MTLTensor` run a full conv net on the GPU timeline alongside render/compute, one full-frame dispatch, zero-copy `MTLTexture`→IOSurface→encoder. WWDC25 S262 explicitly demos a conv upscaler on the GPU timeline. animevideov3 = pure conv → ideal. Toolchain: `coremltools` → `.mlpackage` → `metal-package-builder` → `.mtlpackage`; runtime `MTL4MachineLearningPipelineState` + `dispatchNetworkWithIntermediatesHeap:`. No ANE per-tile dispatch overhead, no tiling (full frame). M3 Pro GPU bandwidth ≈ ANE bandwidth but no per-call latency ceiling. Metal 4 supported M1+/A14+; needs macOS 26 (have it). → Phase 10. Gate preset on `MTL4MachineLearningCommandEncoder` availability; fall back to `CoreMLUpscaler` (ANE) on older OS.
+- **N3 — Metal 4 Frame Interpolator (WWDC25 S211).** Generates intermediate frames from motion vectors + depth. Needs ≥30fps input. For file upscaling we must derive motion vectors (ffmpeg `mestimate`/`phase` filter or a separate ME pass). Output-fps multiplier, not resolution — pair with reduced-FPS decode (FAST_Anime_VSR trick: decode at lower fps, interpolate back) for a net throughput win. → Phase 11, optional.
+- **N4 — Stateful recurrent VSR (Core ML `MLState`, iOS 18+).** BasicVSR-style recurrent net with hidden state persisted across `predict()` calls gives temporal coherence + quality and reuses computation across frames. CoreML-LLM ANE recipe: max 1–2 `ct.StateType` per chunk on ANE (3+ → `ANEProgramProcessRequestDirect Error 11`, GPU-only). The GPU-timeline path (N2) may host a multi-state recurrent net better than ANE. → Phase 12, optional. Source: coremltools stateful-models guide; ANE-book ch5; WWDC24 S10161 (1.6× KV-cache speedup).
+- **N5 — Real-CUGAN ncnn-vulkan preset.** Real-CUGAN (BiliBili) anime SR, same arch family as waifu2x-CUNet, 2x/3x/4x + denoise variants. `realcugan-ncnn-vulkan` (nihui) runs on Apple GPU via Vulkan/MoltenVK — the app already bundles ncnn infra (`realesrgan-ncnn-vulkan` NeuralSR path). Raw model speed not faster than animevideov3 (3.4 vs 10fps V100), but adds a quality alternative at zero new infra cost. → Phase 13, optional.
 
 ---
 
@@ -347,6 +362,134 @@ swift test --filter MLComputePlanGate 2>&1 | tee .claude/plans/phase7-gate.txt
 
 ---
 
+## Phase 9 — N1: Temporal redundancy skip (anime dup-frame reuse)
+
+**Goal:** Skip ANE infer + blit for duplicate/near-duplicate decoded frames by reusing the previous upscaled output with a new PTS. Anime-specific, biggest throughput win.
+
+**Why it works for anime:** limited-animation anime on a 24fps container frequently holds ≤12fps (often lower) unique art frames; the rest are byte-identical or near-identical duplicates. Current pipeline runs full infer on every container frame. Reusing the prior upscaled buffer for a dup frame costs ~0 infer + a cache lookup.
+
+**Design:** Pure-Foundation `FrameRedundancyCache` value type (no AVFoundation/CoreVideo/CoreML dependency) so it is unit-testable standalone via `swiftc`, mirroring `FrameAccumulator`. The cache computes a cheap downsampled-luma signature of each decoded BGRA frame, compares to the previous signature, and returns a reuse decision. CVPixelBuffer/PTS gluing lives in `ProcessingEngine.nextUpscaledFrame`, not the cache.
+
+**Files:**
+- `Anime4K-Upscaler/Utilities/FrameRedundancyCache.swift` (CREATE) — pure Foundation.
+- `Tests/FrameRedundancyTests.swift` (CREATE) — standalone `@main` assert-based self-check, `swiftc`-runnable.
+- `Anime4K-Upscaler/ViewModels/ProcessingEngine.swift` (UPDATE `nextUpscaledFrame`, `executeCoreMLJob`) — wire cache in.
+
+**Cache API (pure Foundation):**
+```swift
+struct FrameRedundancyCache {
+    /// Caller asks before inferring: true = reuse previous output, false = infer fresh.
+    mutating func shouldReuse(currentFrame: Data, width: Int, height: Int) -> Bool
+    /// After a fresh infer, record the new frame's signature as the new "previous".
+    mutating func record(currentFrame: Data, width: Int, height: Int)
+    /// Reset per job / per source switch.
+    mutating func reset()
+}
+```
+
+**Signature design:** downsample to a 16×9 luma grid by strided sampling (every `(w/16, h/9)`-th pixel, G channel as luma proxy), 144 bytes. Compare via mean absolute difference across cells. `dup` iff `meanAbsDiff < DUP_THRESHOLD` AND not first frame. Scene change (very high diff) → fresh, and `record` updates prev so the next frame compares against the new scene. Threshold is a named constant (tunable; start conservative to avoid false-dup on slow pans).
+
+**Steps:**
+1. **RED:** Write `Tests/FrameRedundancyTests.swift` covering: first frame → fresh; identical frame → reuse; near-identical (small per-pixel noise) → reuse; scene change (very different) → fresh; `record` after fresh updates prev; `reset` → next frame fresh; dimension mismatch / empty data → fresh (safe default); signature is cheap (documented, not asserted in test). Compile against not-yet-existing `FrameRedundancyCache` → compile-time RED.
+2. **GREEN:** Implement `FrameRedundancyCache.swift`. Compile test + impl together → all PASS.
+3. Wire into `nextUpscaledFrame`: before `upscaler.upscale`, call `cache.shouldReuse`. On true, return a retained copy of the previous upscaled `CVPixelBuffer` with the new PTS (never hand the encoder the cache backing without copy — encoder may retain). On false, infer fresh, `cache.record(decodedFrame)`, store the upscaled buffer as the new "previous". Reset cache at job start in `executeCoreMLJob`.
+4. SDRescue: the GLSL restore prepass changes pixels even on a dup art frame, so dup-detect runs on the *post-restore* decoded frame (which is what `source.nextFrame()` returns) — still valid; a restored dup is still a dup of the restored prev.
+
+**Validation:**
+```bash
+# Standalone unit tests (pure Foundation, no Xcode):
+swiftc Anime4K-Upscaler/Utilities/FrameRedundancyCache.swift \
+       Tests/FrameRedundancyTests.swift -o /tmp/reduntest && /tmp/reduntest \
+       2>&1 | tee .claude/plans/phase9-redundancy.txt
+# Integration build:
+xcodebuild -project Anime4K-Upscaler.xcodeproj -scheme Anime4K-Upscaler build 2>&1 | tee -a .claude/plans/phase9-redundancy.txt
+```
+
+**Done-when:** standalone tests all PASS; xcodebuild green; benchmark on a real 24fps anime clip shows ≥1.5× effective fps vs Phase 4 baseline; output frames in correct PTS order (visual spot-check: no stutter on scene cuts, no frozen frame across a cut). Threshold tuned so a slow-pan test clip does NOT false-dup.
+
+**Risk:** false-dup on slow pans → frozen-frame stutter. Mitigation: conservative threshold + visual gate; per-cell max diff cap (not just mean) so a single large moving region forces fresh even if the mean is low.
+
+---
+
+## Phase 10 — N2: Metal 4 GPU-timeline SR (MTLTensor + MTL4MachineLearningCommandEncoder)
+
+**Goal:** Run animevideov3 as a full-frame conv net on the GPU timeline via Metal 4, eliminating ANE per-tile dispatch overhead and tiling. New technology (WWDC25 S262).
+
+**Files:**
+- `Anime4K-Upscaler/Utilities/Metal4SRUpscaler.swift` (CREATE) — `MTL4MachineLearningPipelineState` + `MTLTensor` runner; CVPixelBuffer in → CVPixelBuffer out, mirroring `CoreMLUpscaler.upscale` contract.
+- `Anime4K-Upscaler/Scripts/convert_models.py` (UPDATE) — emit `.mtlpackage` via `metal-package-builder` after the `.mlpackage` step.
+- `Anime4K-Upscaler/Models/Models.swift` (UPDATE) — add `special_GpuSR` preset.
+- `Anime4K-Upscaler/ViewModels/ProcessingEngine.swift` (UPDATE) — route `special_GpuSR` to `Metal4SRUpscaler`; keep ANE path default.
+- `Tests/Metal4SRRunnerTests.swift` (CREATE) — single-frame dispatch on macOS 26; PSNR vs ANE path ≥ 40 dB.
+
+**Steps:**
+1. Convert animevideov3 to `.mtlpackage` (`coremltools` → `.mlpackage` → `metal-package-builder`). Ship in bundle.
+2. `Metal4SRUpscaler`: load `.mtlpackage` as `MTLLibrary`, build `MTL4MachineLearningCommandEncoder`, bind input BGRA `MTLTensor` (from decoded `CVPixelBuffer` IOSurface → `MTLTexture` → tensor), `dispatchNetworkWithIntermediatesHeap:` (placement heap ≥ `pipeline.intermediatesHeapSize`), output `MTLTensor` → `MTLTexture` → `CVPixelBuffer` via shared IOSurface. One full-frame dispatch.
+3. Gate: `if #available(macOS 26, *)` + `MTL4MachineLearningCommandEncoder` availability → use GPU path; else fall back to `CoreMLUpscaler` (ANE).
+4. Synchronize via `MTLStageMachineLearning` barrier before the encoder reads the output.
+5. Pair with N1 (Phase 9): GPU-SR + redundancy skip stacks (skip is upstream of infer regardless of which inferer).
+
+**Validation:**
+```bash
+xcodebuild -project Anime4K-Upscaler.xcodeproj -scheme Anime4K-Upscaler build 2>&1 | tee .claude/plans/phase10-mtl4.txt
+# Single-frame runner test (macOS 26 only):
+xcodebuild test -project Anime4K-Upscaler.xcodeproj -scheme Anime4K-Upscaler -only-testing:Metal4SRRunnerTests 2>&1 | tee -a .claude/plans/phase10-mtl4.txt
+```
+
+**Done-when:** build green on macOS 26; single-frame dispatch produces correct upscaled output (PSNR vs ANE path ≥ 40 dB on test frame); benchmark ≥ Phase 4 ANE fps at 1080→4K; clean fallback on pre-Metal-4 OS. `special_GpuSR` target ≥ 6fps true-SR at 1080→4K.
+
+**Risk:** `.mtlpackage` toolchain / `metal-package-builder` not in build env → pre-build in `bundle_dependencies.sh`; ANE fallback always present. Small models (621K params) may be under GPU sweet spot → Phase 6 benchmark decides; keep ANE default if GPU loses.
+
+---
+
+## Phase 11 — N3: Frame interpolation (Metal 4 Frame Interpolator) [OPTIONAL]
+
+**Goal:** Double output fps by generating intermediate frames. Output-fps multiplier, not resolution.
+
+**Files:**
+- `Anime4K-Upscaler/Utilities/FrameInterpolator.swift` (CREATE) — wraps `MTLFXFrameInterpolator` (WWDC25 S211) or ffmpeg `mestimate`+`phase` fallback.
+- `Anime4K-Upscaler/Models/Models.swift` (UPDATE) — add `special_FrameInterp` toggle/preset.
+
+**Steps:**
+1. Metal 4 Frame Interpolator needs motion vectors + depth per frame. For file upscaling, derive motion vectors via ffmpeg `mestimate` (or a separate ME pass) between consecutive upscaled frames; depth is unavailable for 2D video — test whether the interpolator accepts a depth-less path or use ffmpeg `minterpolate` as fallback.
+2. Requires ≥30fps input for decent results (Apple guidance). Pair with N1-reduced throughput: interpolate only on a dup-skipped stream.
+3. Reduced-FPS decode (FAST_Anime_VSR trick): decode at half fps, upscale, interpolate back to original fps — net throughput win if interpolate is cheaper than the skipped infers.
+
+**Done-when:** output plays at 2× fps with no judder; or, if motion-vector derivation proves too costly, document and skip with reason.
+
+---
+
+## Phase 12 — N4: Stateful recurrent VSR (MLState, BasicVSR-style) [OPTIONAL]
+
+**Goal:** Temporal coherence + quality via a recurrent VSR net with hidden state persisted across `predict()` calls.
+
+**Files:**
+- `Anime4K-Upscaler/Utilities/StatefulVSRUpscaler.swift` (CREATE) — `MLState`-based runner.
+- `Anime4K-Upscaler/Scripts/convert_models.py` (UPDATE) — convert a BasicVSR-style model with `ct.StateType` (≤2 states for ANE).
+
+**Steps:**
+1. Convert BasicVSR-style model with 1–2 `ct.StateType` (ANE limit; 3+ → `ANEProgramProcessRequestDirect Error 11`). `minimum_deployment_target=ct.target.iOS18`.
+2. `makeState()` once per sequence; `prediction(from:using:)` per frame.
+3. If ANE state limit blocks, host on the GPU-timeline path (Phase 10) instead.
+4. Validate temporal coherence (no flicker across frames) + PSNR vs single-frame SR.
+
+**Done-when:** coherent output, PSNR ≥ single-frame SR, no ANE state error. Skip with reason if conversion proves incompatible.
+
+---
+
+## Phase 13 — N5: Real-CUGAN ncnn-vulkan preset [OPTIONAL]
+
+**Goal:** Add Real-CUGAN as a quality alternative NeuralSR preset at zero new infra cost (app already bundles ncnn-vulkan).
+
+**Files:**
+- `Anime4K-Upscaler/Models/Models.swift` (UPDATE) — add `neural_CUGAN` mode.
+- `Anime4K-Upscaler/ViewModels/ProcessingEngine.swift` (UPDATE `resolveNcnnModel`) — resolve Real-CUGAN model name.
+- Bundle `realcugan-ncnn-vulkan` + weights into `Resources/VendoredTools/`.
+
+**Done-when:** preset runs end-to-end on a test clip; quality benchmarked vs animevideov3. Ship only if quality beats Fast on a test set.
+
+---
+
 ## Validation summary (whole plan)
 
 ```bash
@@ -412,3 +555,21 @@ swift test --filter MLComputePlanAudit
 - WWDC25 Session 300 VTFrameProcessor ML video SR: https://developer.apple.com/videos/play/wwdc2025/300/
 - Apple Forums VT low-latency empty for 1080p: https://developer.apple.com/forums/thread/821701
 - Ron Regev Real-ESRGAN CoreML conversion on Mac: https://medium.com/@ronregev/optimized-ai-image-video-upscaling-on-macs-with-apple-silicon-m1-m2-m3-m4-a248e128cdc6
+
+### New levers (Phases 9–13, 2026-08-05)
+- WWDC25 Session 262 — Combine Metal 4 ML and graphics (MTLTensor, MTL4MachineLearningCommandEncoder, GPU-timeline SR): https://developer.apple.com/videos/play/wwdc2025/262/
+- WWDC25 Session 211 — Go further with Metal 4 games (Frame Interpolator, Denoised Upscaler): https://developer.apple.com/videos/play/wwdc2025/211/
+- WWDC25 Session 205 — Discover Metal 4 (M1+/A14+ support): https://developer.apple.com/videos/play/wwdc2025/205/
+- Running a ML model on the GPU timeline (Apple docs): https://apple-docs.everest.mt/docs/metal/running-a-machine-learning-model-on-the-gpu-timeline/
+- MTL4MachineLearningCommandEncoder (API ref): https://apple-docs.everest.mt/docs/metal/mtl4machinelearningcommandencoder/
+- FAST_Anime_VSR (redundancy jump, reduced-FPS decode): https://github.com/Kiteretsu77/FAST_Anime_VSR
+- Boosting VSR with Patch-Based Temporal Redundancy (arXiv 2207.08674): https://arxiv.org/abs/2207.08674
+- Real-Time VSR with Redundancy-Aware Inference (Sensors 23:7880): https://www.mdpi.com/1424-8220/23/18/7880
+- 3DSRnet scene-change detection (arXiv 1812.09079): https://arxiv.org/abs/1812.09079
+- Core ML Stateful Models guide: https://apple.github.io/coremltools/docs-guides/source/stateful-models.html
+- CoreML-LLM MLState ANE recipe (1–2 StateType limit): https://github.com/john-rocky/CoreML-LLM/blob/main/docs/MLSTATE_PATTERN.md
+- The Apple Neural Engine Inference Book ch5 (stateful KV cache): https://alvaro-videla.com/ane-book/05-stateful-kv-cache.html
+- WWDC24 S10161 — Deploy ML on-device with Core ML (MLState, 1.6× speedup): https://developer.apple.com/videos/play/wwdc2024/10161/
+- Real-CUGAN (BiliBili): https://github.com/bilibili/ailab/blob/main/Real-CUGAN/README_EN.md
+- realcugan-ncnn-vulkan (nihui): https://github.com/nihui/realcugan-ncnn-vulkan
+- VCISR-official (Kiteretsu77): https://github.com/Kiteretsu77/VCISR-official

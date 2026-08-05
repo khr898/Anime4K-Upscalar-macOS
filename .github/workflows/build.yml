@@ -25,16 +25,29 @@ jobs:
     - name: Show Xcode version
       run: xcodebuild -version
 
-    - name: Install Dependencies
+    - name: Install latest dependencies
       run: |
-        # Core Homebrew ffmpeg is NOT linked against libplacebo, so the bundler
-        # would reject it and fall back to the stale release-DMG ffmpeg (built
-        # against libx265.215 / the ffmpeg 8.1_1 Cellar, both gone from current
-        # Homebrew) and fail the smoke test. Install the homebrew-ffmpeg tap
-        # build with --with-libplacebo so every dep resolves from current brew.
-        brew tap homebrew-ffmpeg/ffmpeg
-        brew install homebrew-ffmpeg/ffmpeg/ffmpeg --with-libplacebo --with-fdk-aac
-        brew install molten-vk xcodegen
+        # The bundler (Anime4K-Upscaler/Scripts/bundle_dependencies.sh) builds
+        # ffmpeg FROM SOURCE against the Homebrew libplacebo + dav1d headers and
+        # copies the libplacebo + MoltenVK bottles into the app bundle. Those
+        # bottles MUST be the latest: libplacebo 360.0 had a custom_shader
+        # color-patch bug fixed in 360.1; MoltenVK must match the Vulkan ABI.
+        # `brew install` alone is a no-op when a package is already present at
+        # an older version (the macos-latest runner ships pre-installed bottles),
+        # so `brew update` + `brew upgrade` are required to guarantee the newest
+        # bottles reach the bundle. The bundler re-runs `brew upgrade` during the
+        # xcodebuild script phase too — belt and suspenders.
+        #   libplacebo : shader dispatch (color-patch fix lives in the 360.1 bottle)
+        #   molten-vk  : Vulkan-on-Metal for libplacebo + ncnn
+        #   dav1d      : provides libdav1d, the software AV1 decoder (ffmpeg --enable-libdav1d)
+        #   pkg-config : ffmpeg configure finds libplacebo/dav1d via pkg-config
+        #   xcodegen   : regenerates the Xcode project from project.yml
+        brew update
+        brew install libplacebo molten-vk dav1d pkg-config xcodegen
+        brew upgrade libplacebo molten-vk dav1d
+        echo "libplacebo: $(brew list --versions libplacebo)"
+        echo "molten-vk:  $(brew list --versions molten-vk)"
+        echo "dav1d:      $(brew list --versions dav1d)"
 
     - name: Resolve release tag and version
       id: get_version
@@ -181,7 +194,40 @@ jobs:
           exit 1
         fi
 
-        echo "Bundled FFmpeg libplacebo check passed (ABI ${PLACEBO_SONAME})."
+        # The bundled libplacebo must be the SAME bottle Homebrew just
+        # installed/upgraded (libplacebo 360.0 had a custom_shader color-patch
+        # bug fixed in 360.1). Soname is 360 across both, so the ABI check above
+        # can't distinguish stale from fresh. Assert the bundled dylib's size
+        # matches the Homebrew bottle's size (the bundler relinks the id, which
+        # can shift a few bytes, so allow a small delta) and that it was copied
+        # during this build (mtime within the last 10 minutes — a stale cached
+        # copy from a prior local build would be older).
+        HOMEBREW_LP="$(brew --prefix libplacebo 2>/dev/null)/lib/libplacebo.${PLACEBO_SONAME}.dylib"
+        if [[ -f "$HOMEBREW_LP" ]]; then
+          HOME_SIZE=$(stat -f%z "$HOMEBREW_LP")
+          BUND_SIZE=$(stat -f%z "$PLACEBO_DYLIB")
+          SIZE_DELTA=$(( BUND_SIZE > HOME_SIZE ? BUND_SIZE - HOME_SIZE : HOME_SIZE - BUND_SIZE ))
+          if (( SIZE_DELTA > 4096 )); then
+            echo "error: bundled libplacebo size ($BUND_SIZE) differs from Homebrew bottle ($HOME_SIZE) by $SIZE_DELTA bytes — likely a stale bottle. Expected the latest 360.1 bottle."
+            echo "   homebrew: $(brew list --versions libplacebo)"
+            exit 1
+          fi
+          echo "libplacebo size check passed (homebrew=$HOME_SIZE, bundled=$BUND_SIZE, delta=$SIZE_DELTA)."
+        else
+          echo "warning: could not locate Homebrew libplacebo bottle to compare size."
+        fi
+
+        # Freshness: the bundler must have copied/relabeled the dylib this build.
+        NOW=$(date +%s)
+        MTIME=$(stat -f%m "$PLACEBO_DYLIB")
+        AGE=$(( NOW - MTIME ))
+        if (( AGE > 600 )); then
+          echo "error: bundled libplacebo dylib is $AGE seconds old — not refreshed this build. The copy_dylibs_recursive refresh guard may have failed to pull the latest bottle."
+          exit 1
+        fi
+        echo "libplacebo freshness check passed (copied ${AGE}s ago)."
+
+        echo "Bundled FFmpeg libplacebo check passed (ABI ${PLACEBO_SONAME}, homebrew $(brew list --versions libplacebo))."
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
