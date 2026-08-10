@@ -26,10 +26,13 @@ import CoreML
 struct MLComputePlanAudit {
     static func main() async {
         let repoRoot = FileManager.default.currentDirectoryPath
+        // MODELS_DIR env var overrides the scanned directory (Phase 2 audits
+        // the staging dir .claude/plans/models-v2 without touching live models).
         // Allow running from repo root or from Tests/ dir.
-        let modelsDir = FileManager.default.fileExists(atPath: "\(repoRoot)/Anime4K-Upscaler/Resources/Models")
+        let defaultModelsDir = FileManager.default.fileExists(atPath: "\(repoRoot)/Anime4K-Upscaler/Resources/Models")
             ? "\(repoRoot)/Anime4K-Upscaler/Resources/Models"
             : "\(repoRoot)/../Anime4K-Upscaler/Resources/Models"
+        let modelsDir = ProcessInfo.processInfo.environment["MODELS_DIR"] ?? defaultModelsDir
         let modelNames = ["pipersr", "realesr-animevideov3", "realesrgan-x4plus-anime"]
 
         print("=== MLComputePlan Audit ===")

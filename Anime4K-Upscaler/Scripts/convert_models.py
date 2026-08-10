@@ -13,14 +13,29 @@ Root fix vs. the original convert_models.py:
 
 Tile size 256x256 matches CoreMLUpscaler's tiling loop (it crops/pads to the
 model's single enumerated size).
+
+Phase 2 (special-pipeline-fps-fix) changes:
+  * Switch OUTPUT to ct.TensorType(float16) — plan Research Appendix A: TensorType
+    output resolves size symbolically and avoids the ImageType-output crash class;
+    Swift converts the tensor to CVPixelBuffer (Phase 3).
+  * Force compute_precision=FLOAT16 — FP32 bars ANE (no FP32 units). Default
+    precision can leak FP32 into conv/activation tails and force CPU placement
+    (Phase 1 audit showed 0 ANE ops, 100% CPU).
+  * Parameterize input shape (H, W) so models can be converted at a fixed large
+    shape (plan: animevideov3 @ 1920x1080; RRDB at the largest ANE-accepted tile).
+  * Keep ImageWrapper clamp*255 (plan: keep in FP16).
+  * Keep activations as-is (PReLU/LeakyReLU). The activation swap (PReLU->SiLU)
+    is Phase 7 — it needs a brief fine-tune to preserve quality and is out of
+    Phase 2 scope. Phase 2 gate is the MLComputePlan re-audit.
 """
 import os, sys, urllib.request
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
 import coremltools as ct
 
-TILE = 256  # fixed square input tile (H=W)
+TILE = 256  # legacy default fixed square input tile (H=W)
 
 
 class ResidualDenseBlock(nn.Module):
@@ -120,26 +135,29 @@ def download(url, path):
         urllib.request.urlretrieve(url, path)
 
 
-def convert(net, out_path):
+def convert(net, out_path, H=TILE, W=TILE):
     net.eval()
     wrapped = ImageWrapper(net).eval()
-    example = torch.rand(1, 3, TILE, TILE)
+    example = torch.rand(1, 3, H, W)
     traced = torch.jit.trace(wrapped, example)
     # scale=1/255 turns the 0-255 image input into the 0-1 tensor the net wants.
+    # TensorType float16 output: plan Phase 2 — avoids ImageType-output crash
+    # class; Swift converts the 0-255 float16 tensor to CVPixelBuffer (Phase 3).
     mlmodel = ct.convert(
         traced,
-        inputs=[ct.ImageType(name="input", shape=(1, 3, TILE, TILE),
+        inputs=[ct.ImageType(name="input", shape=(1, 3, H, W),
                              scale=1.0 / 255.0, color_layout=ct.colorlayout.RGB)],
-        outputs=[ct.ImageType(name="output", color_layout=ct.colorlayout.RGB)],
+        outputs=[ct.TensorType(name="output", dtype=np.float16)],
         convert_to="mlprogram",
         compute_units=ct.ComputeUnit.CPU_AND_NE,
+        compute_precision=ct.precision.FLOAT16,
         minimum_deployment_target=ct.target.macOS14,
     )
     if os.path.exists(out_path):
         import shutil
         shutil.rmtree(out_path)
     mlmodel.save(out_path)
-    print(f"saved {out_path}")
+    print(f"saved {out_path} ({H}x{W})")
 
 
 def main():
@@ -153,7 +171,9 @@ def main():
     sd = torch.load(anime_pth, map_location='cpu')
     sd = sd.get('params_ema', sd.get('params', sd))
     m.load_state_dict(sd, strict=True)
-    convert(m, os.path.join(out_dir, "realesrgan-x4plus-anime.mlpackage"))
+    # RRDB dense 64ch feature maps exceed ANE SRAM at full 1080p -> large fixed
+    # tile (plan B2: probe 540/720/960). Start at 540.
+    convert(m, os.path.join(out_dir, "realesrgan-x4plus-anime.mlpackage"), H=540, W=540)
 
     video_pth = os.path.join(tmp, "realesr-animevideov3.pth")
     download("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth", video_pth)
@@ -161,7 +181,8 @@ def main():
     sd = torch.load(video_pth, map_location='cpu')
     sd = sd.get('params', sd)
     m.load_state_dict(sd, strict=True)
-    convert(m, os.path.join(out_dir, "realesr-animevideov3.mlpackage"))
+    # SRVGGNetCompact is light enough for full-frame 1080p (plan B1).
+    convert(m, os.path.join(out_dir, "realesr-animevideov3.mlpackage"), H=1080, W=1920)
 
 
 if __name__ == "__main__":
