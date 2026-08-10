@@ -286,10 +286,13 @@ final class AppViewModel {
         return batches.first(where: { $0.id == id })
     }
 
-    /// Whether the queue can be started: at least one pending batch and not
-    /// already running. Staging files must be enqueued first (`enqueueBatch`).
+    /// Whether the queue can be started: at least one pending batch OR staged
+    /// files that can be enqueued on the fly, and not already running. Lets the
+    /// "Start Processing" button upscale a single staged file without a manual
+    /// "Add to Queue" click — `startProcessing` enqueues staged files first.
     var canStartProcessing: Bool {
-        batches.contains(where: { $0.state == .pending }) && !isQueueProcessing
+        !isQueueProcessing
+            && (batches.contains(where: { $0.state == .pending }) || !files.isEmpty)
     }
 
     /// Snapshot the current preset + staging files into a new pending batch and
@@ -324,8 +327,14 @@ final class AppViewModel {
 
     /// Start running the queue (all pending batches, sequentially). Add-while-
     /// running works: `enqueueBatch` appends during the run and the runner picks
-    /// it up next loop turn.
+    /// it up next loop turn. If files are still staged with no pending batch
+    /// (e.g. the "Start Processing" button clicked on a single staged file),
+    /// enqueue them first so a manual "Add to Queue" isn't required.
     func startProcessing() {
+        if !files.isEmpty && !batches.contains(where: { $0.state == .pending }) {
+            enqueueBatch()
+            guard batches.contains(where: { $0.state == .pending }) else { return }
+        }
         executeQueue()
     }
 

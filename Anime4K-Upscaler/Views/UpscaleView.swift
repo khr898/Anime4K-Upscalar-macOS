@@ -149,6 +149,20 @@ struct UpscaleView: View {
                 .disabled(!viewModel.canStartProcessing)
             }
         } else {
+            // Start must stay reachable after a batch is enqueued. enqueueBatch
+            // sets selectedBatchID → viewState flips to .processing, which used
+            // to hide the Start button (it lived only in the .configuration
+            // branch above), leaving a pending batch stuck with no way to run
+            // it and no running indication. Render it here whenever a pending
+            // batch exists and the queue isn't already running.
+            if viewModel.canStartProcessing {
+                Button {
+                    viewModel.startProcessing()
+                } label: {
+                    Label("Start", systemImage: "play.fill")
+                }
+                .help("Start processing the queue")
+            }
             if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
