@@ -415,13 +415,14 @@ final class ProcessingEngine {
 
         let tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent("A4K_NSR_\(job.id.uuidString)")
+        // ponytail: defer before createDirectory so a creation-failure partial dir is also cleaned
+        defer { try? FileManager.default.removeItem(at: tempDir) }
         let framesDir = tempDir.appendingPathComponent("frames")
         let upscaledDir = tempDir.appendingPathComponent("upscaled")
         do {
             try FileManager.default.createDirectory(at: framesDir, withIntermediateDirectories: true)
             try FileManager.default.createDirectory(at: upscaledDir, withIntermediateDirectories: true)
         } catch { job.state = .failed; job.errorMessage = "Temp dir failed."; return }
-        defer { try? FileManager.default.removeItem(at: tempDir) }
 
         job.state = .running; job.progress = 0.0; job.startDate = Date()
 
@@ -444,6 +445,9 @@ final class ProcessingEngine {
               !cancellationRequested else { return }
 
         // Stage 3: encode, resizing to the user's target if the model scale differs.
+        guard let outURL = job.outputURL else {
+            job.state = .failed; job.errorMessage = "Output URL could not be determined."; return
+        }
         let asset = AVURLAsset(url: job.file.url)
         let fps: Float = (try? await asset.loadTracks(withMediaType: .video).first?.load(.nominalFrameRate)) ?? 23.976
         let fpsStr = String(format: "%.3f", fps)
@@ -457,7 +461,7 @@ final class ProcessingEngine {
         if mScale != target {
             enc += ["-vf", "scale=iw*\(target)/\(mScale):ih*\(target)/\(mScale):flags=lanczos"]
         }
-        enc.append(job.outputURL!.path)
+        enc.append(outURL.path)
         job.appendLog("Stage 3/3: encoding…")
         if await runSubprocess(executableURL: ffmpegURL, arguments: enc, job: job, step: 3),
            !cancellationRequested {
@@ -518,6 +522,10 @@ final class ProcessingEngine {
                             job.progress = prog
                             job.fps = "realesr"
                         }
+                    } else {
+                        // ponytail: surface non-progress stderr (ffmpeg/realesrgan errors)
+                        let l = lineStr
+                        Task { @MainActor in job.appendLog(l) }
                     }
                 } else {
                     if let prog = FFmpegProgress.parse(line: lineStr) {
@@ -537,6 +545,10 @@ final class ProcessingEngine {
                                 job.fps = String(format: "%.1f", prog.fps)
                             }
                         }
+                    } else {
+                        // ponytail: surface non-progress stderr (ffmpeg errors)
+                        let l = lineStr
+                        Task { @MainActor in job.appendLog(l) }
                     }
                 }
             }
@@ -586,46 +598,11 @@ final class ProcessingEngine {
         let isSDRescue = (job.configuration.mode == .special_SDRescue)
         let modelName = job.configuration.mode.modelName ?? "realesr-animevideov3"
 
-        // --- Optional SD-Rescue pre-pass (Anime4K Restore VL -> PNG frames) runs out-of-process. ---
-        var denoisedFramesDir: URL?
-        var tempRoot: URL?
-        if isSDRescue {
-            let root = FileManager.default.temporaryDirectory
-                .appendingPathComponent("A4K_ANE_\(job.id.uuidString)")
-            let frames = root.appendingPathComponent("denoised")
-            do { try FileManager.default.createDirectory(at: frames, withIntermediateDirectories: true) }
-            catch { job.state = .failed; job.errorMessage = "Temp dir failed."; return }
-            tempRoot = root; denoisedFramesDir = frames
-
-            guard let ffmpeg = FFmpegLocator.ffmpegURL else {
-                job.state = .failed; job.errorMessage = "Bundled ffmpeg missing."; return
-            }
-            let shader = "\(FFmpegLocator.shaderDirectoryPath)/Anime4K_Restore_CNN_VL.glsl"
-            let args = ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y",
-                        "-i", job.file.url.path,
-                        "-vf", "hwupload,libplacebo=custom_shader_path=\(shader),hwdownload,format=rgb24",
-                        frames.appendingPathComponent("%08d.png").path]
-            job.appendLog("Stage 1/2: Anime4K Restore VL pre-pass…")
-            let ok = await runSubprocess(executableURL: ffmpeg, arguments: args, job: job, step: 1)
-            if !ok || cancellationRequested {
-                try? FileManager.default.removeItem(at: root)
-                if cancellationRequested { /* runSubprocess already set .cancelled */ }
-                return
-            }
-        }
-        defer { if let r = tempRoot { try? FileManager.default.removeItem(at: r) } }
-
-        // --- Load model (compiles .mlpackage on first use). ---
-        let upscaler: CoreMLUpscaler
-        do { upscaler = try CoreMLUpscaler(modelName: modelName) }
-        catch {
-            job.state = .failed
-            job.errorMessage = "Failed to load model \(modelName): \(error.localizedDescription)"
-            job.appendLog("ERROR: \(job.errorMessage!)")
-            return
-        }
-
-        // --- Gather source metadata. ---
+        // --- Source metadata (dims needed before launching the streamer). ---
+        // AVAssetReader refuses Matroska (-11828 "Cannot Open") but AVURLAsset
+        // track-metadata loading works on MKV — only sample-reading is blocked,
+        // so naturalSize/fps/duration are safe to load here. The streaming reader
+        // replaces both the old PNG prepass and the AVAssetReader video path.
         let asset = AVURLAsset(url: job.file.url)
         let (naturalSize, fps, duration): (CGSize, Double, Double)
         if let track = try? await asset.loadTracks(withMediaType: .video).first {
@@ -639,17 +616,115 @@ final class ProcessingEngine {
         let outW = inW * targetScale, outH = inH * targetScale
         let totalFrames = max(1, Int(duration * fps))
 
+        // --- Load model (compiles .mlpackage on first use). ---
+        let upscaler: CoreMLUpscaler
+        do { upscaler = try CoreMLUpscaler(modelName: modelName) }
+        catch {
+            job.state = .failed
+            job.errorMessage = "Failed to load model \(modelName): \(error.localizedDescription)"
+            job.appendLog("ERROR: \(job.errorMessage!)")
+            return
+        }
+
+        // --- Streaming decode: ffmpeg -> stdout rawvideo BGRA -> CVPixelBuffer. ---
+        // Zero temp disk, no PNG codec, container-agnostic. SDRescue applies the
+        // Anime4K Restore VL libplacebo shader in the filter chain; other modes
+        // decode plain. Both emit `-pix_fmt bgra -f rawvideo pipe:1` consumed by
+        // RawVideoFrameSource. bgra matches the pipeline's native 32BGRA, so no
+        // swizzle. 10/12-bit sources truncate to 8-bit at -pix_fmt (same as the
+        // prior PNG path; CoreML models are 8-bit RGB regardless) — no upscale
+        // quality regression.
+        guard let ffmpeg = FFmpegLocator.ffmpegURL else {
+            job.state = .failed; job.errorMessage = "Bundled ffmpeg missing."; return
+        }
+
+        // --- Decode probe ladder: VideoToolbox hardware first, libdav1d software
+        // fallback second, default decoder last. AV1 sources MUST use an override
+        // — the native `av1` decoder is hardware-only and yields zero frames on
+        // devices without a functioning AV1 hwaccel, which previously flowed to
+        // the writer as a clean EOF and surfaced as a misleading "Remux exited
+        // 183." The probe pulls one raw frame off-main; on success it pushes
+        // that frame back so the encode loop never loses it, on 0-frame failure
+        // it retries the next mode, and if every mode fails the real error is
+        // surfaced instead of writing an empty .mov. libdav1d works on every Mac
+        // (Intel / M1 / M2 / M3+), so AV1 sources decode even without VT AV1.
+        let shaderPath = "\(FFmpegLocator.shaderDirectoryPath)/Anime4K_Restore_CNN_VL.glsl"
+        let modes: [RawVideoFrameSource.DecodeMode] = isSDRescue
+            ? [.default, .softwareDav1d]      // -hwaccel videotoolbox is not applied to the Vulkan hwupload chain
+            : [.videoToolbox, .softwareDav1d, .default]
+        func modeLabel(_ m: RawVideoFrameSource.DecodeMode) -> String {
+            switch m {
+            case .videoToolbox: return "VideoToolbox hardware"
+            case .softwareDav1d: return "libdav1d software"
+            case .default: return "default decoder"
+            }
+        }
+
+        // Throttle ffmpeg stderr → job log. ffmpeg dumps all stream / sub-track
+        // / metadata info at startup; the old per-line `Task { @MainActor in
+        // job.appendLog(line) }` spawned dozens of MainActor tasks and lagged
+        // the UI. One throttle per job, shared across probe modes, batches lines
+        // on a 100ms timer.
+        let logThrottle = LogThrottle(interval: 0.1) { msg in
+            Task { @MainActor in job.appendLog(msg) }
+        }
+        defer { logThrottle.stop() }
+
+        var source: RawVideoFrameSource?
+        var decodeError: String?
+        for mode in modes {
+            let args = RawVideoFrameSource.streamArgs(mode: mode, inputPath: job.file.url.path,
+                                                       isSDRescue: isSDRescue, shaderPath: shaderPath)
+            let s = RawVideoFrameSource(executableURL: ffmpeg, arguments: args,
+                                        width: inW, height: inH,
+                                        environment: FFmpegLocator.processEnvironment())
+            s.onLog = { line in logThrottle.append(line) }
+            do { try s.start() } catch {
+                decodeError = "Decode stream failed to start (\(modeLabel(mode))): \(error.localizedDescription)"
+                continue
+            }
+            // Probe one frame off-main so a dead/blocked ffmpeg can't stall the
+            // main actor. nil = EOF or failure — consult hasFailed after reaping.
+            let probed = await Task.detached(priority: .userInitiated) { () -> Data? in
+                s.nextRawFrame()
+            }.value
+            if let probed {
+                s.pushFrame(probed)
+                source = s
+                job.appendLog("Stage 1/2: \(isSDRescue ? "Anime4K Restore VL + " : "")decode via \(modeLabel(mode))…")
+                break
+            }
+            s.waitUntilExited()
+            s.cancel()
+            if s.hasFailed {
+                decodeError = "Decode failed (\(modeLabel(mode))): ffmpeg exited \(s.terminationStatus.map(String.init) ?? "?")."
+                continue
+            }
+            // exit 0 but 0 frames → genuinely empty source; no mode will help.
+            decodeError = "Source produced no frames."
+            break
+        }
+
+        guard let source else {
+            job.state = .failed
+            job.errorMessage = decodeError ?? "Decode produced no frames."
+            job.appendLog("ERROR: \(job.errorMessage!)")
+            return
+        }
+
         // Capture Sendable values; run the heavy loop OFF the main actor.
         // Default is NOT cancelled — a deallocated engine must not report phantom user cancels.
         let userCancelled: @Sendable () -> Bool = { [cancelToken] in cancelToken.isCancelled }
-        let denoisedDir = denoisedFramesDir
-        let outputURL = job.outputURL!
+        guard let outputURL = job.outputURL else {
+            source.cancel()
+            job.state = .failed; job.errorMessage = "Output URL could not be determined."; return
+        }
         let codec = job.configuration.codec
 
         let result: CoreMLJobResult = await Task.detached(priority: .userInitiated) {
             await Self.runANEEncode(job: job, upscaler: upscaler, asset: asset,
-                                    isSDRescue: isSDRescue, denoisedDir: denoisedDir,
-                                    inW: inW, inH: inH, outW: outW, outH: outH, fps: fps,
+                                    source: source,
+                                    outW: outW, outH: outH, fps: fps,
                                     targetScale: targetScale, totalFrames: totalFrames,
                                     outputURL: outputURL, codec: codec, isCancelled: userCancelled)
         }.value
@@ -669,11 +744,15 @@ final class ProcessingEngine {
 
     private enum CoreMLJobResult: Sendable { case completed, cancelled, failed(String) }
 
-    /// Off-main-actor ANE encode loop. Reads frames (decoded source or denoised PNGs),
-    /// upscales each via Core ML, writes them in order. Constant memory, back-pressured.
+    /// Off-main-actor ANE encode loop. Pulls decoded BGRA frames from the
+    /// streaming `source` (ffmpeg stdout rawvideo), upscales each via Core ML,
+    /// writes them in order. Zero temp disk, constant memory, back-pressured by
+    /// the pipe. `asset` is used only for audio passthrough (when not remuxing);
+    /// video never comes from AVAssetReader, which refuses containers
+    /// AVFoundation can't sample-read (e.g. Matroska, -11828).
     nonisolated private static func runANEEncode(
         job: ProcessingJob, upscaler: CoreMLUpscaler, asset: AVURLAsset,
-        isSDRescue: Bool, denoisedDir: URL?, inW: Int, inH: Int, outW: Int, outH: Int,
+        source: RawVideoFrameSource, outW: Int, outH: Int,
         fps: Double, targetScale: Int, totalFrames: Int, outputURL: URL,
         codec: VideoCodec, isCancelled: @escaping @Sendable () -> Bool
     ) async -> CoreMLJobResult {
@@ -684,8 +763,11 @@ final class ProcessingEngine {
             : outputURL
         try? FileManager.default.removeItem(at: writeURL)
 
-        guard let writer = try? AVAssetWriter(outputURL: writeURL, fileType: .mov) else {
-            return .failed("Failed to create writer.")
+        let writer: AVAssetWriter
+        do {
+            writer = try AVAssetWriter(outputURL: writeURL, fileType: .mov)
+        } catch {
+            return .failed("Failed to create writer: \(error.localizedDescription) [\((error as NSError).domain) \((error as NSError).code)]")
         }
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
@@ -706,24 +788,32 @@ final class ProcessingEngine {
         guard writer.canAdd(vInput) else { return .failed("Cannot add video track.") }
         writer.add(vInput)
 
-        // Reader for the decoded source (non-SD path) and for audio passthrough (both paths).
-        guard let reader = try? AVAssetReader(asset: asset) else { return .failed("Failed to create reader.") }
-        var videoOut: AVAssetReaderTrackOutput?
-        if !isSDRescue, let vt = try? await asset.loadTracks(withMediaType: .video).first {
-            let o = AVAssetReaderTrackOutput(track: vt,
-                outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
-            if reader.canAdd(o) { reader.add(o); videoOut = o }
+        // Reader: used ONLY for in-process audio passthrough, and only when we are
+        // NOT remuxing (the remux pulls audio+subs from the original file via
+        // ffmpeg, so the reader is redundant on the remux path). Video always
+        // comes from the streaming source. If the reader can't be created (e.g.
+        // source container AVFoundation refuses), degrade to the ffmpeg audio-copy
+        // mux fallback after the video writer finishes — never a silent output.
+        var reader: AVAssetReader?
+        var readerFailedAudioOnly = false
+        if !needsRemux {
+            do {
+                reader = try AVAssetReader(asset: asset)
+            } catch {
+                reader = nil
+                readerFailedAudioOnly = true
+            }
         }
         var audioOut: AVAssetReaderTrackOutput?
         var audioIn: AVAssetWriterInput?
-        if let at = try? await asset.loadTracks(withMediaType: .audio).first {
+        if let reader, let at = try? await asset.loadTracks(withMediaType: .audio).first {
             let o = AVAssetReaderTrackOutput(track: at, outputSettings: nil)
             if reader.canAdd(o) { reader.add(o); audioOut = o }
             let i = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
             if writer.canAdd(i) { writer.add(i); audioIn = i }
         }
 
-        if videoOut != nil || audioOut != nil {
+        if let reader, audioOut != nil {
             guard reader.startReading() else { return .failed("Reader start failed: \(reader.error?.localizedDescription ?? "")") }
         }
         guard writer.startWriting() else { return .failed("Writer start failed: \(writer.error?.localizedDescription ?? "")") }
@@ -731,37 +821,33 @@ final class ProcessingEngine {
 
         let q = DispatchQueue(label: "a4k.ane.encode")
         var frameIndex = 0
-        var sdFrame = 1
         let start = Date()
 
+        var mlFailure: String?
         func nextUpscaledFrame() -> (CVPixelBuffer, CMTime)? {
-            if isSDRescue {
-                guard let dir = denoisedDir else { return nil }
-                let url = dir.appendingPathComponent(String(format: "%08d.png", sdFrame))
-                guard FileManager.default.fileExists(atPath: url.path),
-                      let ci = CIImage(contentsOf: url) else { return nil }
-                sdFrame += 1
-                let pts = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
-                if let up = try? upscaler.upscale(ci, width: inW, height: inH, targetScale: targetScale) {
-                    return (up, pts)
-                }
-                return nil
-            } else {
-                guard let sb = videoOut?.copyNextSampleBuffer(),
-                      let pb = CMSampleBufferGetImageBuffer(sb) else { return nil }
-                let pts = CMSampleBufferGetPresentationTimeStamp(sb)
-                if let up = try? upscaler.upscale(pb, targetScale: targetScale) { return (up, pts) }
+            // Pull one BGRA frame off the ffmpeg stdout stream (blocks the queue
+            // thread until a full frame arrives — natural backpressure). nil = EOF
+            // or cancel; the buffer carries its own width/height so upscale reads
+            // dims from it directly.
+            guard let buf = source.nextFrame() else { return nil }
+            let pts = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
+            do {
+                let up = try upscaler.upscale(buf, targetScale: targetScale)
+                return (up, pts)
+            } catch {
+                mlFailure = "Upscale failed at frame \(frameIndex): \(error.localizedDescription)"
                 return nil
             }
         }
 
         // Drive video on a writer-ready callback (back-pressure, no busy-wait).
+        // videoDone: true = clean end-of-stream, false = cancelled OR ML failure.
         let videoDone = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             vInput.requestMediaDataWhenReady(on: q) {
                 while vInput.isReadyForMoreMediaData {
-                    if isCancelled() { cont.resume(returning: false); return }
+                    if isCancelled() { source.cancel(); cont.resume(returning: false); return }
                     guard let (buf, pts) = nextUpscaledFrame() else {
-                        vInput.markAsFinished(); cont.resume(returning: true); return
+                        vInput.markAsFinished(); cont.resume(returning: mlFailure == nil); return
                     }
                     adaptor.append(buf, withPresentationTime: pts)
                     frameIndex += 1
@@ -779,7 +865,11 @@ final class ProcessingEngine {
                 }
             }
         }
-        if !videoDone { reader.cancelReading(); writer.cancelWriting(); return .cancelled }
+        if !videoDone {
+            reader?.cancelReading(); writer.cancelWriting()
+            if let mlFailure { return .failed(mlFailure) }
+            return .cancelled
+        }
 
         // Audio passthrough.
         if let aIn = audioIn, let aOut = audioOut {
@@ -800,6 +890,37 @@ final class ProcessingEngine {
         }
         guard writer.status == .completed else {
             return .failed("Writer failed: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")")
+        }
+
+        // SDRescue non-remux: if AVAssetReader could not be created for audio
+        // passthrough, mux audio (+subs) from the original file via ffmpeg so the
+        // output is not silent. Video is already written to outputURL.
+        if readerFailedAudioOnly {
+            guard let ffmpeg = await MainActor.run(body: { FFmpegLocator.ffmpegURL }) else {
+                return .failed("ffmpeg missing for audio mux fallback.")
+            }
+            let ext = outputURL.pathExtension.isEmpty ? "mkv" : outputURL.pathExtension
+            let muxTmp = FileManager.default.temporaryDirectory
+                .appendingPathComponent("A4K_mux_\(job.id.uuidString).\(ext)")
+            let proc = Process()
+            proc.executableURL = ffmpeg
+            proc.arguments = ["-y", "-i", outputURL.path, "-i", job.file.url.path,
+                              "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
+                              "-c", "copy", muxTmp.path]
+            proc.environment = await MainActor.run(body: { FFmpegLocator.processEnvironment() })
+            do { try proc.run(); proc.waitUntilExit() }
+            catch { try? FileManager.default.removeItem(at: muxTmp); return .failed("Audio mux launch failed: \(error.localizedDescription)") }
+            if proc.terminationStatus != 0 {
+                try? FileManager.default.removeItem(at: muxTmp)
+                return .failed("Audio mux exited \(proc.terminationStatus); output left video-only at \(outputURL.lastPathComponent).")
+            }
+            do {
+                try FileManager.default.removeItem(at: outputURL)
+                try FileManager.default.moveItem(at: muxTmp, to: outputURL)
+            } catch {
+                try? FileManager.default.removeItem(at: muxTmp)
+                return .failed("Audio mux replace failed: \(error.localizedDescription)")
+            }
         }
 
         // Remux to requested container/codec if needed (out-of-process, copy or AV1 transcode).
