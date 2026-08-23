@@ -1,32 +1,0 @@
-Torch version 2.7.1 has not been tested with coremltools. You may run into unexpected errors. Torch 2.7.0 is the most recent version that has been tested.
-[0.0s] === variant macOS15_prelu silu=False ===
-Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/123 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 122/123 [00:00<00:00, 7137.75 ops/s]
-Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 1019.17 passes/s]
-Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  62%|██████▏   | 59/95 [00:00<00:00, 422.91 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 501.94 passes/s]
-Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1137.00 passes/s]
-[1.9s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/macOS15_prelu/realesr-animevideov3.mlpackage (256x256) target=9
-[1.9s] === variant iOS26_prelu silu=False ===
-Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/123 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 122/123 [00:00<00:00, 8719.97 ops/s]
-Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 1164.70 passes/s]
-Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  66%|██████▋   | 63/95 [00:00<00:00, 628.61 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 691.21 passes/s]
-Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1154.77 passes/s]
-[3.9s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/iOS26_prelu/realesr-animevideov3.mlpackage (256x256) target=10
-[3.9s] === variant macOS14_silu silu=True ===
-Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/123 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 122/123 [00:00<00:00, 9756.24 ops/s]
-Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 1280.78 passes/s]
-Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  71%|███████   | 67/95 [00:00<00:00, 665.39 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 733.57 passes/s]
-Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1243.34 passes/s]
-[5.6s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/macOS14_silu/realesr-animevideov3.mlpackage (256x256) target=8
-[5.6s] === variant macOS15_silu silu=True ===
-Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/123 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 122/123 [00:00<00:00, 8536.67 ops/s]
-Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 1262.28 passes/s]
-Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  69%|██████▉   | 66/95 [00:00<00:00, 655.35 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 732.65 passes/s]
-Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1221.14 passes/s]
-[7.3s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/macOS15_silu/realesr-animevideov3.mlpackage (256x256) target=9
-[7.3s] === variant iOS26_silu silu=True ===
-Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/123 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 122/123 [00:00<00:00, 9577.11 ops/s]
-Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 1261.67 passes/s]
-Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  68%|██████▊   | 65/95 [00:00<00:00, 649.05 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 732.54 passes/s]
-Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1259.71 passes/s]
-[9.1s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/iOS26_silu/realesr-animevideov3.mlpackage (256x256) target=10
-[9.1s] ALL DONE

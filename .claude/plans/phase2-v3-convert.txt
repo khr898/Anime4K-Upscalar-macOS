@@ -1,6 +1,0 @@
-Torch version 2.7.1 has not been tested with coremltools. You may run into unexpected errors. Torch 2.7.0 is the most recent version that has been tested.
-[0.0s] downloading animevideov3 weights
-downloading https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth
-[2.4s] building SRVGGNetCompact upscale=4
-[2.5s] loaded state_dict
-[2.5s] converting at 1080x1920 -> /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/realesr-animevideov3.mlpackage
