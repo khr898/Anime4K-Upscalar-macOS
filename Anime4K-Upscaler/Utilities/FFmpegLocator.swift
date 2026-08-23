@@ -126,13 +126,16 @@ struct FFmpegLocator {
         }
 
         // MoltenVK Synchronization & Stability Configuration:
-        // Prevents Read-After-Write (RAW) race conditions, flickering, and diagonal
-        // stair-stepped triangle artifacts across multi-pass Anime4K GLSL shader pipelines
-        // on Apple Silicon Tile-Based Deferred Rendering (TBDR) GPUs.
+        // Prevents Read-After-Write (RAW) race conditions, green/black flashes, and diagonal
+        // stair-stepped zigzag ribbon artifacts across multi-pass Anime4K GLSL shader pipelines
+        // on Apple Silicon Tile-Based Deferred Rendering (TBDR) GPUs (addresses mpv #17258).
+        env["MVK_CONFIG_ALLOW_METAL_EVENTS"] = "0"            // Disables MTLEvent timeline semaphores to bypass driver synchronization bugs
+        env["MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE"] = "0"    // Forces single-queue implicit Metal synchronization
         env["MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS"] = "1"     // Process queue submissions synchronously on calling thread
         env["MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS"] = "0" // Disable prefilling to prevent inter-pass command races
-        env["MVK_CONFIG_USE_COMMAND_TASK_POOL"] = "0"         // Disable asynchronous command task pool
-        env["MVK_CONFIG_TEXTURE_BARRIERS"] = "1"              // Enforce strict intermediate render-target texture barriers
+        env["MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE"] = "1"       // Full arbitrary component swizzling for planar textures
+        env["MVK_CONFIG_FAST_MATH_ENABLED"] = "0"             // Disables fast math to guarantee exact numerical IEEE-754 precision
+        env["MVK_CONFIG_RESUME_LOST_DEVICE"] = "1"            // Automatically recovers Vulkan device context on transient interruptions
 
         return env
     }()
