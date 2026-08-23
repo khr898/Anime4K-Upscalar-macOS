@@ -116,24 +116,6 @@ final class StreamOptimizeViewModel {
         if selectedFileID == nil { selectedFileID = files.first?.id }
     }
 
-    /// Enqueue a batch immediately: if staging has files, enqueues them; if staging
-    /// is empty, prompts file/folder picker, stages them, and enqueues in one action.
-    func addAndEnqueueBatch() {
-        if files.isEmpty {
-            let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
-            guard !urls.isEmpty else { return }
-
-            let discovered = FileDiscovery.resolveVideoFiles(from: urls)
-            guard !discovered.isEmpty else { return }
-
-            for videoFile in discovered {
-                guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
-                files.append(videoFile)
-            }
-            probeFiles()
-        }
-        enqueueBatch()
-    }
 
     func removeFile(id: UUID) {
         if let index = files.firstIndex(where: { $0.id == id }) {

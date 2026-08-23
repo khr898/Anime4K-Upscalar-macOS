@@ -26,23 +26,13 @@ struct EmptyStateView: View {
                 .font(.body)
                 .foregroundStyle(.secondary)
 
-            HStack(spacing: 12) {
-                Button {
-                    viewModel.addFiles()
-                } label: {
-                    Label("Add Files / Folders", systemImage: "plus.circle.fill")
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-
-                Button {
-                    viewModel.addAndEnqueueBatch()
-                } label: {
-                    Label("Enqueue Batch...", systemImage: "plus.app.fill")
-                }
-                .buttonStyle(.bordered)
-                .controlSize(.large)
+            Button {
+                viewModel.addFiles()
+            } label: {
+                Label("Add Files / Folders", systemImage: "plus.circle.fill")
             }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
             .padding(.top, 4)
 
             VStack(alignment: .leading, spacing: 4) {

@@ -160,24 +160,6 @@ final class AppViewModel {
         }
     }
 
-    /// Enqueue a batch immediately: if staging has files, enqueues them; if staging
-    /// is empty, prompts file/folder picker, stages them, and enqueues in one action.
-    func addAndEnqueueBatch() {
-        if files.isEmpty {
-            let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
-            guard !urls.isEmpty else { return }
-
-            let discovered = FileDiscovery.resolveVideoFiles(from: urls)
-            guard !discovered.isEmpty else { return }
-
-            for videoFile in discovered {
-                guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
-                files.append(videoFile)
-            }
-            probeNewFiles()
-        }
-        enqueueBatch()
-    }
 
     /// Remove a file from the list.
     /// - Parameter id: The UUID of the file to remove.
