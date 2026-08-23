@@ -4,6 +4,12 @@
 
 import Foundation
 
+enum Anime4KShader: String {
+    case clampHighlights = "Anime4K_Clamp_Highlights.glsl"
+    case restoreCNNM = "Anime4K_Restore_CNN_M.glsl"
+    case upscaleCNNx2M = "Anime4K_Upscale_CNN_x2_M.glsl"
+}
+
 @main
 struct ShaderHookOrderTests {
     static func main() {
@@ -59,6 +65,31 @@ struct ShaderHookOrderTests {
                     check("\(file):\(idx + 1) hook target is MAIN", hookTarget == "MAIN", "Found hook '\(hookTarget)' in \(file)")
                 }
             }
+        }
+
+        // 3. Verify ShaderCombiner texture namespace isolation
+        let clampShader = "\(shadersDir)/Anime4K_Clamp_Highlights.glsl"
+        let restoreShader = "\(shadersDir)/Anime4K_Restore_CNN_M.glsl"
+        let upscaleShader = "\(shadersDir)/Anime4K_Upscale_CNN_x2_M.glsl"
+
+        if let clampC = try? String(contentsOfFile: clampShader, encoding: .utf8),
+           let restoreC = try? String(contentsOfFile: restoreShader, encoding: .utf8),
+           let upscaleC = try? String(contentsOfFile: upscaleShader, encoding: .utf8) {
+
+            let s0 = ShaderCombiner.isolateShaderTextures(content: clampC, prefix: "s0_")
+            let s1 = ShaderCombiner.isolateShaderTextures(content: restoreC, prefix: "s1_")
+            let s2 = ShaderCombiner.isolateShaderTextures(content: upscaleC, prefix: "s2_")
+            let combined = s0 + "\n\n" + s1 + "\n\n" + s2
+
+            check("s0 prefixed STATSMAX", s0.contains("//!SAVE s0_STATSMAX"))
+            check("s1 prefixed conv2d_tf", s1.contains("//!SAVE s1_conv2d_tf"))
+            check("s2 prefixed conv2d_tf", s2.contains("//!SAVE s2_conv2d_tf"))
+            check("s1 and s2 do not share conv2d_tf", !combined.contains("//!SAVE conv2d_tf"))
+            check("MAIN is not prefixed in s0", s0.contains("//!HOOK MAIN"))
+            check("MAIN is not prefixed in s1", s1.contains("//!SAVE MAIN"))
+            check("MAIN is not prefixed in s2", s2.contains("//!SAVE MAIN"))
+        } else {
+            check("Failed to load shaders for isolation test", false)
         }
 
         print("\n\(passed) passed, \(failed) failed\n")
