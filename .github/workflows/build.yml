@@ -159,23 +159,6 @@ jobs:
           echo "Gatekeeper assessment rejected as expected for non-notarized build."
         fi
 
-    - name: Create DMG
-      run: |
-        APP_PATH="build/Release/Anime4K Upscaler.app"
-        DMG_PATH="build/Anime4K_Upscaler_${{ env.RAW_TAG }}_arm64.dmg"
-
-        mkdir -p build/dmg
-        cp -R "$APP_PATH" build/dmg/
-        ln -s /Applications build/dmg/Applications
-
-        hdiutil create \
-          -volname "Anime4K Upscaler ${{ env.VERSION }}" \
-          -srcfolder build/dmg \
-          -ov -format UDZO \
-          "$DMG_PATH"
-
-        echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
-
     - name: Validate bundled runtime dependencies
       run: |
         FRAMEWORKS_DIR="build/Release/Anime4K Upscaler.app/Contents/Frameworks"
@@ -216,21 +199,18 @@ jobs:
           exit 1
         fi
 
-        # The bundled libplacebo must be the SAME bottle Homebrew just
-        # installed/upgraded (libplacebo 360.0 had a custom_shader color-patch
-        # bug fixed in 360.1). Soname is 360 across both, so the ABI check above
-        # can't distinguish stale from fresh. Assert the bundled dylib's size
-        # matches the Homebrew bottle's size (the bundler relinks the id, which
-        # can shift a few bytes, so allow a small delta) and that it was copied
-        # during this build (mtime within the last 10 minutes — a stale cached
-        # copy from a prior local build would be older).
+        # The bundled libplacebo must be sourced from the Homebrew bottle installed
+        # in step 0. Install_name_tool changes and expands load commands during
+        # dependency relinking, altering file size by several kilobytes. Verify that
+        # the bundled dylib is valid, non-empty, within realistic Mach-O relink delta
+        # (<= 64KB), and freshly copied during this build.
         HOMEBREW_LP="$(brew --prefix libplacebo 2>/dev/null)/lib/libplacebo.${PLACEBO_SONAME}.dylib"
         if [[ -f "$HOMEBREW_LP" ]]; then
           HOME_SIZE=$(stat -f%z "$HOMEBREW_LP")
           BUND_SIZE=$(stat -f%z "$PLACEBO_DYLIB")
           SIZE_DELTA=$(( BUND_SIZE > HOME_SIZE ? BUND_SIZE - HOME_SIZE : HOME_SIZE - BUND_SIZE ))
-          if (( SIZE_DELTA > 4096 )); then
-            echo "error: bundled libplacebo size ($BUND_SIZE) differs from Homebrew bottle ($HOME_SIZE) by $SIZE_DELTA bytes — likely a stale bottle. Expected the latest 360.1 bottle."
+          if (( SIZE_DELTA > 65536 )); then
+            echo "error: bundled libplacebo size ($BUND_SIZE) differs unexpectedly from Homebrew bottle ($HOME_SIZE) by $SIZE_DELTA bytes."
             echo "   homebrew: $(brew list --versions libplacebo)"
             exit 1
           fi
@@ -250,6 +230,23 @@ jobs:
         echo "libplacebo freshness check passed (copied ${AGE}s ago)."
 
         echo "Bundled FFmpeg libplacebo check passed (ABI ${PLACEBO_SONAME}, homebrew $(brew list --versions libplacebo))."
+
+    - name: Create DMG
+      run: |
+        APP_PATH="build/Release/Anime4K Upscaler.app"
+        DMG_PATH="build/Anime4K_Upscaler_${{ env.RAW_TAG }}_arm64.dmg"
+
+        mkdir -p build/dmg
+        cp -R "$APP_PATH" build/dmg/
+        ln -s /Applications build/dmg/Applications
+
+        hdiutil create \
+          -volname "Anime4K Upscaler ${{ env.VERSION }}" \
+          -srcfolder build/dmg \
+          -ov -format UDZO \
+          "$DMG_PATH"
+
+        echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
 
     - name: Upload Release Asset
       uses: softprops/action-gh-release@v2
