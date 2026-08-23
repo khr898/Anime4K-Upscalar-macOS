@@ -885,65 +885,82 @@ final class ProcessingEngine {
         writer.startSession(atSourceTime: .zero)
         reader?.startReading()
 
-        // Core encoding loop
-        let success = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            let channel = FrameChannel<(CVPixelBuffer, CMTime)>(capacity: 8)
-            let redundancy = FrameRedundancyCache(threshold: 0.9995)
-            var lastUpscaled: CVPixelBuffer?
+        let q = DispatchQueue(label: "a4k.ane.encode")
+        let producerQ = DispatchQueue(label: "a4k.encode.producer")
+        let start = Date()
+        var frameIndex = 0   // writer-side output count (appends) — drives progress
+        var pushed = 0        // producer-side count — drives PTS (FIFO == append order)
+        var mlFailure: String?
 
-            // Upscaler worker Task
-            Task.detached(priority: .userInitiated) {
-                var frameIndex = 0
-                while !isCancelled() {
-                    guard let buf = source.nextFrame() else { break }   // EOF
-                    let pts = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
-                    let sig = redundancy.computeSignature(of: buf)
-                    let reuse = sig.map { redundancy.shouldReuse(signature: $0) } ?? false
-                    var up: CVPixelBuffer
-                    if reuse, let last = lastUpscaled {
-                        up = last
-                    } else {
-                        do { up = try upscaler.upscale(buf, targetScale: targetScale) }
-                        catch {
-                            channel.close()
-                            await MainActor.run { job.appendLog("Upscale error: \(error.localizedDescription)") }
-                            break
-                        }
-                        if sig != nil { lastUpscaled = up }
+        // --- Phase 4 ring: producer decodes+infers AHEAD of the writer through a
+        // bounded channel (capacity 2), so frame N+1 infers while frame N is
+        // appended to the writer. upscaler + source are each touched only from
+        // producerQ (serial), so the non-Sendable CoreML/MetalFX scaler and the
+        // RawVideoFrameSource state stay single-threaded. The channel is FIFO, so
+        // PTS assigned in push order == append order.
+        let channel = FrameChannel<(CVPixelBuffer, CMTime)>(capacity: 2)
+
+        // Phase 9 temporal-redundancy cache: dup/near-dup frames reuse the previous
+        // upscaled output (skip infer). Signature is read from the locked decoded
+        // buffer (144 luma samples, no full-frame copy).
+        var redundancy = FrameRedundancyCache()
+        var lastUpscaled: CVPixelBuffer?
+
+        producerQ.async {
+            while !isCancelled() {
+                guard let buf = source.nextFrame() else { break }   // EOF
+                let w = CVPixelBufferGetWidth(buf), h = CVPixelBufferGetHeight(buf)
+                let sig = Self.lumaSignature(buf, w: w, h: h)
+                let reuse = sig.map { redundancy.shouldReuse(signature: $0) } ?? false
+                let up: CVPixelBuffer
+                if reuse, let last = lastUpscaled {
+                    up = last                       // dup: reuse previous output, skip infer
+                } else {
+                    do { up = try upscaler.upscale(buf, targetScale: targetScale) }
+                    catch {
+                        mlFailure = "Upscale failed at frame \(pushed): \(error.localizedDescription)"
+                        break
                     }
-                    frameIndex += 1
-                    channel.push((up, pts))
+                    lastUpscaled = up
+                    if let sig { redundancy.record(signature: sig) }
                 }
-                channel.close()
+                let pts = CMTime(value: CMTimeValue(pushed), timescale: CMTimeScale(fps))
+                pushed += 1
+                channel.push((up, pts))
             }
+            channel.close()
+        }
 
-            // Writer loop on private queue
-            let writerQueue = DispatchQueue(label: "com.anime4k.writer", qos: .userInitiated)
-            var wroteFrames = 0
-            vInput.requestMediaDataWhenReady(on: writerQueue) {
+        // --- Consumer: the AVAssetWriter callback drains the channel. nil pop =
+        // producer hit EOF (clean) or broke on failure (mlFailure set). Order is
+        // preserved by the channel's FIFO. videoDone: true = clean EOS, false =
+        // cancelled OR ML failure.
+        let videoDone = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            vInput.requestMediaDataWhenReady(on: q) {
                 while vInput.isReadyForMoreMediaData {
                     if isCancelled() { source.cancel(); channel.close(); cont.resume(returning: false); return }
                     guard let (buf, pts) = channel.pop() else {
-                        vInput.markAsFinished()
-                        cont.resume(returning: true)
-                        return
+                        vInput.markAsFinished(); cont.resume(returning: mlFailure == nil); return
                     }
                     adaptor.append(buf, withPresentationTime: pts)
-                    wroteFrames += 1
-                    if wroteFrames % 30 == 0 || wroteFrames == totalFrames {
-                        let prog = totalFrames > 0 ? min(1.0, Double(wroteFrames) / Double(totalFrames)) : 0.0
+                    frameIndex += 1
+                    if frameIndex % 10 == 0 {
+                        let f = frameIndex
+                        let elapsed = Date().timeIntervalSince(start)
+                        let cur = Double(f) / max(elapsed, 0.001)
                         Task { @MainActor in
-                            job.progress = prog
-                            job.currentFrame = wroteFrames
+                            job.progress = min(0.99, Double(f) / Double(totalFrames))
+                            job.currentFrame = f
+                            job.fps = String(format: "%.1f", cur)
+                            job.speed = String(format: "x%.3f", cur / fps)
                         }
                     }
                 }
             }
         }
-
-        guard success else {
-            writer.cancelWriting()
-            try? FileManager.default.removeItem(at: writeURL)
+        if !videoDone {
+            reader?.cancelReading(); writer.cancelWriting()
+            if let mlFailure { return .failed(mlFailure) }
             return .cancelled
         }
 

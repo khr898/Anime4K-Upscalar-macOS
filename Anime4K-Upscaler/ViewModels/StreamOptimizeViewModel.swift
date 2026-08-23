@@ -174,6 +174,11 @@ final class StreamOptimizeViewModel {
         selectedBatchID == nil ? .configuration : .processing
     }
 
+    var selectedFile: VideoFile? {
+        guard let id = selectedFileID else { return files.first }
+        return files.first(where: { $0.id == id })
+    }
+
     enum ViewState: String {
         case configuration
         case processing
