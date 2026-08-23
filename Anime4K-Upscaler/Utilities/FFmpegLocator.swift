@@ -92,7 +92,7 @@ struct FFmpegLocator {
             "file_format_version": "1.0.0",
             "ICD": {
                 "library_path": "\(moltenVKPath)",
-                "api_version": "1.2.0"
+                "api_version": "1.4.0"
             }
         }
         """
@@ -126,11 +126,10 @@ struct FFmpegLocator {
         }
 
         // MoltenVK Synchronization & Stability Configuration:
-        // Prevents Read-After-Write (RAW) race conditions, green/black flashes, and diagonal
-        // stair-stepped zigzag ribbon artifacts across multi-pass Anime4K GLSL shader pipelines
-        // on Apple Silicon Tile-Based Deferred Rendering (TBDR) GPUs (addresses mpv #17258).
-        env["MVK_CONFIG_ALLOW_METAL_EVENTS"] = "0"            // Disables MTLEvent timeline semaphores to bypass driver synchronization bugs
-        env["MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE"] = "0"    // Forces single-queue implicit Metal synchronization
+        // Enforces thread-safe synchronous queue submission, proper Metal event synchronization,
+        // and IEEE-754 precision on Apple Silicon TBDR GPUs.
+        env["MVK_CONFIG_ALLOW_METAL_EVENTS"] = "1"            // Enables MTLEvent synchronization for hwupload <-> libplacebo
+        env["MVK_CONFIG_VK_SEMAPHORE_SUPPORT_STYLE"] = "1"    // Enables Metal events where safe (matches CLI MoltenVK)
         env["MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS"] = "1"     // Process queue submissions synchronously on calling thread
         env["MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS"] = "0" // Disable prefilling to prevent inter-pass command races
         env["MVK_CONFIG_FULL_IMAGE_VIEW_SWIZZLE"] = "1"       // Full arbitrary component swizzling for planar textures

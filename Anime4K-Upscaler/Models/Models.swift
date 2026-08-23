@@ -862,54 +862,25 @@ struct FilterGraphBuilder {
         var filterComponents: [String] = []
 
         if !shaders.isEmpty {
-            // Phase 1: Group shaders into stages split at each upscaler boundary.
-            // Each stage becomes ONE libplacebo invocation with a combined shader.
-            var stages: [(shaders: [Anime4KShader], scale: Bool)] = []
-            var currentGroup: [Anime4KShader] = []
-            var currentScale = 1
+            // Concatenate all active shaders for the mode into a single combined shader.
+            // Executing all passes (Restore, Upscale, Denoise) within ONE libplacebo filter
+            // allows libplacebo's internal renderer to manage render-pass dependencies and
+            // texture barriers, eliminating inter-filter GPU race conditions on Apple Silicon.
+            let combinedPath = ShaderCombiner.combinedShaderPath(
+                shaders: shaders, directory: shaderDirectory)
+            let escapedPath = combinedPath.replacingOccurrences(of: "'", with: "'\\''")
 
-            for shader in shaders {
-                if shader.isUpscaler && currentScale < resolution.scaleFactor {
-                    // Flush current non-upscaler group first
-                    if !currentGroup.isEmpty {
-                        stages.append((shaders: currentGroup, scale: false))
-                        currentGroup = []
-                    }
-                    stages.append((shaders: [shader], scale: true))
-                    currentScale *= 2
-                } else if !shader.isUpscaler {
-                    currentGroup.append(shader)
-                }
-                // Skip upscaler if target scale already reached
-            }
-            if !currentGroup.isEmpty {
-                stages.append((shaders: currentGroup, scale: false))
-            }
-
-            // Phase 2: For each stage, concatenate shader files and build ONE
-            // libplacebo filter invocation per stage.
             filterComponents.append("hwupload")
 
-            for (index, stage) in stages.enumerated() {
-                let combinedPath = ShaderCombiner.combinedShaderPath(
-                    shaders: stage.shaders, directory: shaderDirectory)
-                let escapedPath = combinedPath.replacingOccurrences(of: "'", with: "'\\''")
-
-                // The last libplacebo stage must set the output sw_format:
-                // hwdownload can only download the hwframe's own sw_format, so
-                // without this the download to p010le/yuv420p10le fails with
-                // "Invalid output format ... for hwframe download" (EINVAL).
-                let formatSuffix = (index == stages.count - 1) ? ":format=\(codec.pixelFormat)" : ""
-
-                if stage.scale {
-                    filterComponents.append(
-                        "libplacebo=w=iw*2:h=ih*2:custom_shader_path='\(escapedPath)'\(formatSuffix)"
-                    )
-                } else {
-                    filterComponents.append(
-                        "libplacebo=custom_shader_path='\(escapedPath)'\(formatSuffix)"
-                    )
-                }
+            let scale = resolution.scaleFactor
+            if scale > 1 {
+                filterComponents.append(
+                    "libplacebo=w=iw*\(scale):h=ih*\(scale):custom_shader_path='\(escapedPath)':format=\(codec.pixelFormat)"
+                )
+            } else {
+                filterComponents.append(
+                    "libplacebo=custom_shader_path='\(escapedPath)':format=\(codec.pixelFormat)"
+                )
             }
 
             filterComponents.append("hwdownload")
