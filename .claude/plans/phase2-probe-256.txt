@@ -1,0 +1,12 @@
+Torch version 2.7.1 has not been tested with coremltools. You may run into unexpected errors. Torch 2.7.0 is the most recent version that has been tested.
+[0.0s] downloading animevideov3 weights
+downloading https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth
+[1.5s] building SRVGGNetCompact upscale=4
+[1.6s] loaded state_dict
+[1.6s] converting at 256x256 -> models-v2
+Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/123 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 122/123 [00:00<00:00, 7121.95 ops/s]
+Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 980.21 passes/s]
+Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  62%|██████▏   | 59/95 [00:00<00:00, 415.40 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 487.28 passes/s]
+Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1151.86 passes/s]
+saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/realesr-animevideov3.mlpackage (256x256)
+[3.6s] DONE

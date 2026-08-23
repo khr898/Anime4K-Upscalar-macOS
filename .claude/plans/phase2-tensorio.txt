@@ -1,0 +1,12 @@
+Torch version 2.7.1 has not been tested with coremltools. You may run into unexpected errors. Torch 2.7.0 is the most recent version that has been tested.
+Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/125 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  99%|█████████▉| 124/125 [00:00<00:00, 7869.48 ops/s]
+Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 942.84 passes/s]
+Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  62%|██████▏   | 59/95 [00:00<00:00, 428.34 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 505.26 passes/s]
+Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 1172.66 passes/s]
+[2.0s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/tensorio_animevideov3/realesr-animevideov3.mlpackage (256x256) tensorIO
+Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/790 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops:  97%|█████████▋| 765/790 [00:00<00:00, 7593.88 ops/s]Converting PyTorch Frontend ==> MIL Ops: 100%|█████████▉| 789/790 [00:00<00:00, 7594.78 ops/s]
+Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 155.76 passes/s]
+Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  20%|██        | 19/95 [00:00<00:00, 182.02 passes/s]Running MIL default pipeline:  40%|████      | 38/95 [00:00<00:00, 131.70 passes/s]Running MIL default pipeline:  58%|█████▊    | 55/95 [00:00<00:00, 144.78 passes/s]Running MIL default pipeline:  75%|███████▍  | 71/95 [00:00<00:00, 75.20 passes/s] Running MIL default pipeline:  96%|█████████▌| 91/95 [00:00<00:00, 99.04 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 101.93 passes/s]
+Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 190.76 passes/s]
+[58.2s] saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/tensorio_rrdb/realesrgan-x4plus-anime.mlpackage (256x256) tensorIO
+[58.2s] ALL DONE

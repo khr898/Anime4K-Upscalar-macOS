@@ -35,6 +35,11 @@ enum BatchState: String, Sendable, CaseIterable {
         case .completed, .failed, .cancelled: return false
         }
     }
+
+    /// Whether a batch in this state can be deleted from the queue (all states except running).
+    var isDeletable: Bool {
+        self != .running
+    }
 }
 
 /// Framework-free queue decision helpers. Kept pure (value in, value out) so the

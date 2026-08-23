@@ -34,19 +34,19 @@ struct DecodeArgsTests {
         // --- Non-SDRescue (plain decode) ---
         do {
             let a = RawVideoFrameSource.streamArgs(mode: .default, inputPath: input,
-                                                    isSDRescue: false, shaderPath: shader)
+                                                    usesRestoreShader: false, shaderPath: shader)
             check("plain default", a == ["-y", "-i", input, "-pix_fmt", "bgra", "-f", "rawvideo", "pipe:1"], "got \(a)")
         }
         do {
             let a = RawVideoFrameSource.streamArgs(mode: .videoToolbox, inputPath: input,
-                                                    isSDRescue: false, shaderPath: shader)
+                                                    usesRestoreShader: false, shaderPath: shader)
             check("plain videoToolbox has -hwaccel videotoolbox before -i",
                   a == ["-y", "-hwaccel", "videotoolbox", "-i", input, "-pix_fmt", "bgra", "-f", "rawvideo", "pipe:1"],
                   "got \(a)")
         }
         do {
             let a = RawVideoFrameSource.streamArgs(mode: .softwareDav1d, inputPath: input,
-                                                    isSDRescue: false, shaderPath: shader)
+                                                    usesRestoreShader: false, shaderPath: shader)
             check("plain softwareDav1d forces libdav1d decoder before -i",
                   a == ["-y", "-c:v", "libdav1d", "-i", input, "-pix_fmt", "bgra", "-f", "rawvideo", "pipe:1"],
                   "got \(a)")
@@ -56,7 +56,7 @@ struct DecodeArgsTests {
         let sdrVF = "hwupload,libplacebo=custom_shader_path=\(shader):format=p010le,hwdownload,format=p010le"
         do {
             let a = RawVideoFrameSource.streamArgs(mode: .default, inputPath: input,
-                                                    isSDRescue: true, shaderPath: shader)
+                                                    usesRestoreShader: true, shaderPath: shader)
             check("sdr default chain",
                   a == ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y",
                         "-i", input, "-vf", sdrVF, "-pix_fmt", "bgra", "-f", "rawvideo", "pipe:1"],
@@ -66,14 +66,14 @@ struct DecodeArgsTests {
             // VT hwaccel is NOT applied to the SDRescue Vulkan chain (unverified
             // VT+Vulkan interaction); .videoToolbox collapses to .default here.
             let a = RawVideoFrameSource.streamArgs(mode: .videoToolbox, inputPath: input,
-                                                    isSDRescue: true, shaderPath: shader)
+                                                    usesRestoreShader: true, shaderPath: shader)
             check("sdr videoToolbox collapses to default (no -hwaccel on Vulkan chain)",
                   !a.contains("-hwaccel") && a.contains("-vf") && a.contains(sdrVF),
                   "got \(a)")
         }
         do {
             let a = RawVideoFrameSource.streamArgs(mode: .softwareDav1d, inputPath: input,
-                                                    isSDRescue: true, shaderPath: shader)
+                                                    usesRestoreShader: true, shaderPath: shader)
             check("sdr softwareDav1d forces libdav1d decoder before -i",
                   a == ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y",
                         "-c:v", "libdav1d", "-i", input, "-vf", sdrVF, "-pix_fmt", "bgra",

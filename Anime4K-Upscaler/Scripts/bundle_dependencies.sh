@@ -41,19 +41,45 @@ if command -v brew >/dev/null 2>&1; then
     echo "🍺 Ensuring libplacebo + molten-vk + dav1d are latest via Homebrew..."
     brew install libplacebo molten-vk dav1d 2>/dev/null || true
     brew upgrade libplacebo molten-vk dav1d 2>/dev/null || true
-    echo "   libplacebo: $(brew list --versions libplacebo 2>/dev/null | awk '{print $2}')"
-    echo "   molten-vk:  $(brew list --versions molten-vk 2>/dev/null | awk '{print $2}')"
-    echo "   dav1d:      $(brew list --versions dav1d 2>/dev/null | awk '{print $2}')"
+    LP_VER=$(brew list --versions libplacebo 2>/dev/null | awk '{print $2}')
+    MVK_VER=$(brew list --versions molten-vk 2>/dev/null | awk '{print $2}')
+    DAV1D_VER=$(brew list --versions dav1d 2>/dev/null | awk '{print $2}')
+    echo "   libplacebo: $LP_VER"
+    echo "   molten-vk:  $MVK_VER"
+    echo "   dav1d:      $DAV1D_VER"
+
+    # Strict version assertion: libplacebo must be >= 7.360.1 (fixes color patch bug)
+    if [[ -n "$LP_VER" ]]; then
+        # Check if version starts with 7.360.0 (or below 7.360.1)
+        if [[ "$LP_VER" == 7.360.0* || "$LP_VER" == [0-6].* || "$LP_VER" == 7.[0-3][0-5][0-9].* ]]; then
+            echo "error: libplacebo version $LP_VER is below required minimum 7.360.1 (color patch bug present)."
+            exit 1
+        fi
+        echo "   ✅ libplacebo version $LP_VER meets >= 7.360.1 requirement."
+    fi
+
+    # Strict version assertion: molten-vk must be >= 1.4.2
+    if [[ -n "$MVK_VER" ]]; then
+        if [[ "$MVK_VER" == 1.[0-3].* || "$MVK_VER" == 1.4.[0-1] || "$MVK_VER" == 0.* ]]; then
+            echo "error: molten-vk version $MVK_VER is below required minimum 1.4.2."
+            exit 1
+        fi
+        echo "   ✅ molten-vk version $MVK_VER meets >= 1.4.2 requirement."
+    fi
 fi
 
 build_custom_ffmpeg() {
-    echo "🛠️  Building custom FFmpeg with Vulkan, libplacebo (>=7.360.1), and libdav1d..."
+    echo "🛠️  Building custom FFmpeg 9 with Vulkan, libplacebo (>=7.360.1), and libdav1d..."
     temp_build_dir="${SRCROOT}/ffmpeg_build"
     mkdir -p "$temp_build_dir"
     cd "$temp_build_dir"
 
     if [[ ! -d "ffmpeg" ]]; then
         git clone --depth 1 https://git.ffmpeg.org/ffmpeg.git ffmpeg
+    else
+        cd ffmpeg
+        GIT_CONFIG_GLOBAL=/dev/null git pull --ff-only 2>/dev/null || true
+        cd ..
     fi
     cd ffmpeg
 

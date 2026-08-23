@@ -49,6 +49,28 @@ jobs:
         echo "molten-vk:  $(brew list --versions molten-vk)"
         echo "dav1d:      $(brew list --versions dav1d)"
 
+    - name: Enforce dependency version rules
+      run: |
+        LP_VER=$(brew list --versions libplacebo | awk '{print $2}')
+        MVK_VER=$(brew list --versions molten-vk | awk '{print $2}')
+        if [[ -z "$LP_VER" ]]; then
+          echo "error: libplacebo is not installed via Homebrew."
+          exit 1
+        fi
+        if [[ "$LP_VER" == 7.360.0* || "$LP_VER" == [0-6].* || "$LP_VER" == 7.[0-3][0-5][0-9].* ]]; then
+          echo "error: libplacebo version $LP_VER is below required 7.360.1 (color patch fix missing)."
+          exit 1
+        fi
+        if [[ -z "$MVK_VER" ]]; then
+          echo "error: molten-vk is not installed via Homebrew."
+          exit 1
+        fi
+        if [[ "$MVK_VER" == 1.[0-3].* || "$MVK_VER" == 1.4.[0-1] || "$MVK_VER" == 0.* ]]; then
+          echo "error: molten-vk version $MVK_VER is below required 1.4.2."
+          exit 1
+        fi
+        echo "✅ Dependency versions verified: libplacebo=$LP_VER, molten-vk=$MVK_VER"
+
     - name: Resolve release tag and version
       id: get_version
       run: |

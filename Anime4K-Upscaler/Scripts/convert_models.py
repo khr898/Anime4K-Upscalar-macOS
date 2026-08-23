@@ -15,21 +15,35 @@ Tile size 256x256 matches CoreMLUpscaler's tiling loop (it crops/pads to the
 model's single enumerated size).
 
 Phase 2 (special-pipeline-fps-fix) changes:
-  * Switch OUTPUT to ct.TensorType(float16) — plan Research Appendix A: TensorType
-    output resolves size symbolically and avoids the ImageType-output crash class;
-    Swift converts the tensor to CVPixelBuffer (Phase 3).
+  * Keep OUTPUT as ct.ImageType. The original crash was ImageType output +
+    EnumeratedShapes (flexible) INPUT — CoreML couldn't resolve a concrete
+    output size. With a SINGLE FIXED input shape, ImageType output resolves
+    concretely and is safe (the old bundled 256x256 models are ImageType out
+    and work). TensorType output was considered (plan Appendix A) to let Swift
+    skip the image wrap, but it would force a Phase 3 MLMultiArray→CVPixelBuffer
+    path in CoreMLUpscaler — not worth it when fixed-shape ImageType already
+    works. The fps win comes from the full-frame SHAPE, not the I/O type.
   * Force compute_precision=FLOAT16 — FP32 bars ANE (no FP32 units). Default
     precision can leak FP32 into conv/activation tails and force CPU placement
-    (Phase 1 audit showed 0 ANE ops, 100% CPU).
-  * Parameterize input shape (H, W) so models can be converted at a fixed large
-    shape (plan: animevideov3 @ 1920x1080; RRDB at the largest ANE-accepted tile).
-  * Keep ImageWrapper clamp*255 (plan: keep in FP16).
-  * Keep activations as-is (PReLU/LeakyReLU). The activation swap (PReLU->SiLU)
-    is Phase 7 — it needs a brief fine-tune to preserve quality and is out of
-    Phase 2 scope. Phase 2 gate is the MLComputePlan re-audit.
+    (Phase 1 VM audit showed 0 ANE ops; bare-metal baseline confirmed ANE
+    placement with only the ImageWrapper mul+cast tail on CPU — 2 ops).
+  * Parameterize input shape (H, W). BARE-METAL FINDING (Phase 2): the win is
+    NOT fewer tiles — it is fitting the ANE SRAM. A feature map of input^2 x
+    channels x 2B must stay under ~32MB or CoreML silently falls back to CPU
+    (the MLComputePlan audit shows static ANE placement; runtime dispatch is
+    separate). 540x540x64ch = 37MB -> CPU -> 1.5fps (SLOWER than the 1.9fps
+    full-frame CPU baseline). 256x256x64ch = 8.4MB fits -> ANE. Revert to 256,
+    confirm the ANE fps jump on metal, THEN bump tile size toward the SRAM
+    ceiling to cut dispatch count. RRDB concat hits 192ch so it stays at 256
+    (256^2 x 192ch x 2B = 25MB).
+  * Keep ImageWrapper clamp*255 (the mul+cast tail — 2 CPU-fallback ops on
+    metal, acceptable).
+  * Keep activations as-is (PReLU/LeakyReLU). Bare-metal MLComputePlan showed
+    ios17.prelu / ios17.leaky_relu place on ANE (not CPU) on real hardware, so
+    the Phase 7 PReLU->SiLU swap is unnecessary on this metal. Only the
+    ImageWrapper mul+cast tail remains on CPU.
 """
 import os, sys, urllib.request
-import numpy as np
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
@@ -136,18 +150,23 @@ def download(url, path):
 
 
 def convert(net, out_path, H=TILE, W=TILE):
+    # Resumable: skip if already converted (delete the .mlpackage to force).
+    if os.path.exists(out_path):
+        print(f"skip {out_path} (exists)")
+        return
     net.eval()
     wrapped = ImageWrapper(net).eval()
     example = torch.rand(1, 3, H, W)
     traced = torch.jit.trace(wrapped, example)
     # scale=1/255 turns the 0-255 image input into the 0-1 tensor the net wants.
-    # TensorType float16 output: plan Phase 2 — avoids ImageType-output crash
-    # class; Swift converts the 0-255 float16 tensor to CVPixelBuffer (Phase 3).
+    # ImageType output + FIXED input shape: concrete output size resolves, no
+    # libBNNS crash (the crash was ImageType out + flexible/EnumeratedShapes in).
+    # Swift gets a CVPixelBuffer back from prediction — no tensor conversion.
     mlmodel = ct.convert(
         traced,
         inputs=[ct.ImageType(name="input", shape=(1, 3, H, W),
                              scale=1.0 / 255.0, color_layout=ct.colorlayout.RGB)],
-        outputs=[ct.TensorType(name="output", dtype=np.float16)],
+        outputs=[ct.ImageType(name="output", color_layout=ct.colorlayout.RGB)],
         convert_to="mlprogram",
         compute_units=ct.ComputeUnit.CPU_AND_NE,
         compute_precision=ct.precision.FLOAT16,
@@ -171,9 +190,14 @@ def main():
     sd = torch.load(anime_pth, map_location='cpu')
     sd = sd.get('params_ema', sd.get('params', sd))
     m.load_state_dict(sd, strict=True)
-    # RRDB dense 64ch feature maps exceed ANE SRAM at full 1080p -> large fixed
-    # tile (plan B2: probe 540/720/960). Start at 540.
-    convert(m, os.path.join(out_dir, "realesrgan-x4plus-anime.mlpackage"), H=540, W=540)
+    # RRDB concat feature maps hit 192ch (64 + 4x32 grow). M3 Pro ANE shared SRAM
+    # is 16MB (NOT 32 — that was M4 Max per Orion/SlugWiki). 540x540x192ch x2B =
+    # 112MB, 256x256x192ch = 25MB, both overflow -> silent CPU fallback (measured
+    # 1.9->1.5fps drop). 128x128x192ch x2B = 6.3MB (+8.7MB weights +intermediates)
+    # is the best fit at the 16MB ceiling; per-operand streaming handles the
+    # >2MB single-tensor limit. 128^2 is also the proven pipersr ANE size. RRDB
+    # is the "quality" preset (slow/offline) so more tiles is acceptable.
+    convert(m, os.path.join(out_dir, "realesrgan-x4plus-anime.mlpackage"), H=128, W=128)
 
     video_pth = os.path.join(tmp, "realesr-animevideov3.pth")
     download("https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-animevideov3.pth", video_pth)
@@ -181,8 +205,14 @@ def main():
     sd = torch.load(video_pth, map_location='cpu')
     sd = sd.get('params', sd)
     m.load_state_dict(sd, strict=True)
-    # SRVGGNetCompact is light enough for full-frame 1080p (plan B1).
-    convert(m, os.path.join(out_dir, "realesr-animevideov3.mlpackage"), H=1080, W=1920)
+    # SRVGGNetCompact, 64ch throughout (no concat). M3 Pro ANE shared SRAM = 16MB.
+    # 540x540x64ch x2B = 37MB -> CPU fallback (measured 1.5fps, SLOWER than the
+    # 1.9fps full-frame CPU baseline because 12 CPU tiles + overlap > 1 CPU tile).
+    # 256x256x64ch = 8.4MB x3 live intermediates = 25MB > 16MB -> still spills.
+    # 192x192x64ch = 4.7MB x3 = 14MB < 16MB -> FITS, ANE-resident. 192^2 is the
+    # M3 Pro sweet spot (per-operand 2MB limit -> 128^2 is fully resident but
+    # 4x more tiles; 192^2 balances tile count vs SRAM at the 16MB ceiling).
+    convert(m, os.path.join(out_dir, "realesr-animevideov3.mlpackage"), H=192, W=192)
 
 
 if __name__ == "__main__":

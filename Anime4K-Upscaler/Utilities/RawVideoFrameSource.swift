@@ -28,14 +28,17 @@ final class RawVideoFrameSource {
     /// Builds the exact ffmpeg argument array the streaming source launches with.
     /// Pure (no I/O) so it is unit-testable standalone via swiftc.
     static func streamArgs(mode: DecodeMode, inputPath: String,
-                           isSDRescue: Bool, shaderPath: String) -> [String] {
-        // SDRescue runs the Anime4K Restore VL shader via a Vulkan libplacebo
-        // chain; plain modes just decode. Both emit `-pix_fmt bgra -f rawvideo
-        // pipe:1` consumed here. -hwaccel videotoolbox is only applied to the
-        // plain path — its interaction with the Vulkan hwupload chain is
-        // unverified, so SDRescue .videoToolbox collapses to .default and relies
-        // on the .softwareDav1d fallback for AV1 sources.
-        if isSDRescue {
+                           usesRestoreShader: Bool, shaderPath: String) -> [String] {
+        // Restore-shader modes (SDRescue + MetalFX) run the Anime4K Restore VL
+        // shader via a Vulkan libplacebo chain to reconstruct degraded anime
+        // line art BEFORE the upscaler — MetalFX alone is a generic spatial
+        // scaler and looks soft/blurry on anime without this preprocess. Plain
+        // modes just decode. Both emit `-pix_fmt bgra -f rawvideo pipe:1`
+        // consumed here. -hwaccel videotoolbox is only applied to the plain
+        // path — its interaction with the Vulkan hwupload chain is unverified,
+        // so restore-shader .videoToolbox collapses to .default and relies on
+        // the .softwareDav1d fallback for AV1 sources.
+        if usesRestoreShader {
             let vf = "hwupload,libplacebo=custom_shader_path=\(shaderPath):format=p010le,hwdownload,format=p010le"
             var a = ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y"]
             if mode == .softwareDav1d { a += ["-c:v", "libdav1d"] }

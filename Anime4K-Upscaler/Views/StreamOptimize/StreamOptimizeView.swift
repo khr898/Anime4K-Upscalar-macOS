@@ -271,7 +271,6 @@ private struct StreamOptimizeConfigView: View {
                 } maximumValueLabel: {
                     Text("\(viewModel.encoder.maxQuality)").font(.caption2).foregroundStyle(.tertiary)
                 }
-                .tint(.teal)
 
                 if viewModel.encoder.usesCRF {
                     Text("Lower CRF = higher quality, larger file. 28 is a good balance for streaming.")

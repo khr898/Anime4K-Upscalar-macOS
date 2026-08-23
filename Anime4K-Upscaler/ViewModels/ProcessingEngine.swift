@@ -9,6 +9,7 @@ import CoreML
 import VideoToolbox
 import CoreImage
 
+
 /// Thread-safe cancellation flag shared with detached pipeline work.
 /// Needed because `cancellationRequested` is main-actor-isolated and can't be
 /// read from `@Sendable` closures running off-actor.
@@ -22,6 +23,16 @@ final class CancellationToken: @unchecked Sendable {
     func cancel() { lock.lock(); _isCancelled = true; lock.unlock() }
     func reset() { lock.lock(); _isCancelled = false; lock.unlock() }
 }
+
+/// Common interface for frame upscalers so the encode loop
+/// (`ProcessingEngine.runUpscaleEncode`) is shared by the CoreML/ANE path and
+/// the MetalFX/GPU path. Both take a decoded BGRA CVPixelBuffer + targetScale
+/// and return an upscaled BGRA CVPixelBuffer.
+protocol FrameUpscaler {
+    func upscale(_ inputBuffer: CVPixelBuffer, targetScale: Int) throws -> CVPixelBuffer
+}
+extension CoreMLUpscaler: FrameUpscaler {}
+extension MetalFXUpscaler: FrameUpscaler {}
 
 /// Manages the lifecycle of FFmpeg processes for video upscaling jobs.
 /// Handles process spawning, stderr parsing for progress, cancellation,
@@ -90,8 +101,8 @@ final class ProcessingEngine {
             await executeSubprocessNeuralJob(job)
             return
         }
-        if job.configuration.mode.isSpecial {
-            await executeCoreMLJob(job)
+        if job.configuration.mode.isSpecial || job.configuration.mode.isMetalFX {
+            await executeUpscaleJob(job)
             return
         }
 
@@ -588,15 +599,28 @@ final class ProcessingEngine {
 
     // MARK: - Core ML ANE Pipeline
 
-    private func executeCoreMLJob(_ job: ProcessingJob) async {
+    private func executeUpscaleJob(_ job: ProcessingJob) async {
         job.state = .running
         job.progress = 0.0
         job.startDate = Date()
         cancelToken.reset()   // per-job token; a cancelJob on a previous job must not cancel this one
 
-        let targetScale = max(2, job.configuration.resolution.scaleFactor)   // upscaling modes never 1x
-        let isSDRescue = (job.configuration.mode == .special_SDRescue)
-        let modelName = job.configuration.mode.modelName ?? "realesr-animevideov3"
+        let mode = job.configuration.mode
+        // Special-neural modes run a fixed-ratio CoreML model (4×/2× native);
+        // force its native scale so a stale selector value can't trigger a
+        // wasteful 4×-infer-then-downscale-to-2× path (the picker is locked in
+        // the UI — this is the belt-and-braces guard). MetalFX honors the
+        // selector (arbitrary spatial scale).
+        let targetScale = mode.isSpecial ? mode.fixedScaleFactor
+                                         : max(2, job.configuration.resolution.scaleFactor)
+        let isSDRescue = (mode == .special_SDRescue)
+        let isMetalFX = mode.isMetalFX
+        // Restore VL (libplacebo via Vulkan/MoltenVK) reconstructs line art before
+        // the upscaler — used by SDRescue and both MetalFX pipelines. MetalFX+Sharpen
+        // additionally applies a contrast-gated unsharp-mask compute pass after the
+        // GPU upscale for anime edge sharpen (flat areas untouched).
+        let usesRestoreShader = isSDRescue || isMetalFX
+        let modelName = mode.modelName ?? "realesr-animevideov3"
 
         // --- Source metadata (dims needed before launching the streamer). ---
         // AVAssetReader refuses Matroska (-11828 "Cannot Open") but AVURLAsset
@@ -616,12 +640,17 @@ final class ProcessingEngine {
         let outW = inW * targetScale, outH = inH * targetScale
         let totalFrames = max(1, Int(duration * fps))
 
-        // --- Load model (compiles .mlpackage on first use). ---
-        let upscaler: CoreMLUpscaler
-        do { upscaler = try CoreMLUpscaler(modelName: modelName) }
-        catch {
+        // --- Load upscaler: MetalFX (GPU) for special_MetalFX, else CoreML (ANE). ---
+        let upscaler: any FrameUpscaler
+        do {
+            if isMetalFX {
+                upscaler = try MetalFXUpscaler(applySharpen: mode == .special_MetalFX_Sharp)
+            } else {
+                upscaler = try CoreMLUpscaler(modelName: modelName)
+            }
+        } catch {
             job.state = .failed
-            job.errorMessage = "Failed to load model \(modelName): \(error.localizedDescription)"
+            job.errorMessage = "Failed to load \(isMetalFX ? "MetalFX upscaler" : "model \(modelName)"): \(error.localizedDescription)"
             job.appendLog("ERROR: \(job.errorMessage!)")
             return
         }
@@ -649,7 +678,7 @@ final class ProcessingEngine {
         // surfaced instead of writing an empty .mov. libdav1d works on every Mac
         // (Intel / M1 / M2 / M3+), so AV1 sources decode even without VT AV1.
         let shaderPath = "\(FFmpegLocator.shaderDirectoryPath)/Anime4K_Restore_CNN_VL.glsl"
-        let modes: [RawVideoFrameSource.DecodeMode] = isSDRescue
+        let modes: [RawVideoFrameSource.DecodeMode] = usesRestoreShader
             ? [.default, .softwareDav1d]      // -hwaccel videotoolbox is not applied to the Vulkan hwupload chain
             : [.videoToolbox, .softwareDav1d, .default]
         func modeLabel(_ m: RawVideoFrameSource.DecodeMode) -> String {
@@ -674,7 +703,7 @@ final class ProcessingEngine {
         var decodeError: String?
         for mode in modes {
             let args = RawVideoFrameSource.streamArgs(mode: mode, inputPath: job.file.url.path,
-                                                       isSDRescue: isSDRescue, shaderPath: shaderPath)
+                                                       usesRestoreShader: usesRestoreShader, shaderPath: shaderPath)
             let s = RawVideoFrameSource(executableURL: ffmpeg, arguments: args,
                                         width: inW, height: inH,
                                         environment: FFmpegLocator.processEnvironment())
@@ -691,7 +720,7 @@ final class ProcessingEngine {
             if let probed {
                 s.pushFrame(probed)
                 source = s
-                job.appendLog("Stage 1/2: \(isSDRescue ? "Anime4K Restore VL + " : "")decode via \(modeLabel(mode))…")
+                job.appendLog("Stage 1/2: \(usesRestoreShader ? "Anime4K Restore VL + " : "")decode via \(modeLabel(mode))…")
                 break
             }
             s.waitUntilExited()
@@ -722,7 +751,7 @@ final class ProcessingEngine {
         let codec = job.configuration.codec
 
         let result: CoreMLJobResult = await Task.detached(priority: .userInitiated) {
-            await Self.runANEEncode(job: job, upscaler: upscaler, asset: asset,
+            await Self.runUpscaleEncode(job: job, upscaler: upscaler, asset: asset,
                                     source: source,
                                     outW: outW, outH: outH, fps: fps,
                                     targetScale: targetScale, totalFrames: totalFrames,
@@ -732,7 +761,7 @@ final class ProcessingEngine {
         switch result {
         case .completed:
             job.state = .completed; job.progress = 1.0; job.endDate = Date()
-            job.appendLog("Core ML (ANE) processing completed.")
+            job.appendLog(isMetalFX ? "MetalFX (GPU) processing completed." : "Core ML (ANE) processing completed.")
         case .cancelled:
             job.state = .cancelled; job.endDate = Date()
             job.appendLog("Processing cancelled by user.")
@@ -744,14 +773,39 @@ final class ProcessingEngine {
 
     private enum CoreMLJobResult: Sendable { case completed, cancelled, failed(String) }
 
-    /// Off-main-actor ANE encode loop. Pulls decoded BGRA frames from the
-    /// streaming `source` (ffmpeg stdout rawvideo), upscales each via Core ML,
-    /// writes them in order. Zero temp disk, constant memory, back-pressured by
-    /// the pipe. `asset` is used only for audio passthrough (when not remuxing);
-    /// video never comes from AVAssetReader, which refuses containers
-    /// AVFoundation can't sample-read (e.g. Matroska, -11828).
-    nonisolated private static func runANEEncode(
-        job: ProcessingJob, upscaler: CoreMLUpscaler, asset: AVURLAsset,
+    /// Build the 16×9 luma signature (BGRA G channel, byte offset 1) for a
+    /// decoded frame so `FrameRedundancyCache` can decide dup-reuse without a
+    /// full-frame Data copy. Reads only 144 pixels with `bytesPerRow` stride
+    /// (handles row padding). Mirrors `FrameRedundancyCache.signature` but on a
+    /// locked CVPixelBuffer. Returns nil if the buffer can't be locked.
+    nonisolated private static func lumaSignature(_ pb: CVPixelBuffer, w: Int, h: Int) -> [UInt8]? {
+        CVPixelBufferLockBaseAddress(pb, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(pb, .readOnly) }
+        guard let base = CVPixelBufferGetBaseAddress(pb) else { return nil }
+        let bpr = CVPixelBufferGetBytesPerRow(pb)
+        let gW = FrameRedundancyCache.gridW, gH = FrameRedundancyCache.gridH
+        let strideX = max(1, w / gW), strideY = max(1, h / gH)
+        var sig = [UInt8](repeating: 0, count: FrameRedundancyCache.cellCount)
+        let row = base.assumingMemoryBound(to: UInt8.self)
+        for cy in 0..<gH {
+            for cx in 0..<gW {
+                let px = min(cx * strideX, w - 1), py = min(cy * strideY, h - 1)
+                let off = py * bpr + px * 4 + 1   // G channel (luma proxy), BGRA
+                sig[cy * gW + cx] = row[off]
+            }
+        }
+        return sig
+    }
+
+    /// Off-main-actor upscale encode loop. Pulls decoded BGRA frames from the
+    /// streaming `source` (ffmpeg stdout rawvideo), upscales each via the given
+    /// `FrameUpscaler` (CoreML/ANE or MetalFX/GPU), writes them in order. Zero
+    /// temp disk, constant memory, back-pressured by the pipe. `asset` is used
+    /// only for audio passthrough (when not remuxing); video never comes from
+    /// AVAssetReader, which refuses containers AVFoundation can't sample-read
+    /// (e.g. Matroska, -11828).
+    nonisolated private static func runUpscaleEncode(
+        job: ProcessingJob, upscaler: any FrameUpscaler, asset: AVURLAsset,
         source: RawVideoFrameSource, outW: Int, outH: Int,
         fps: Double, targetScale: Int, totalFrames: Int, outputURL: URL,
         codec: VideoCodec, isCancelled: @escaping @Sendable () -> Bool
@@ -820,33 +874,60 @@ final class ProcessingEngine {
         writer.startSession(atSourceTime: .zero)
 
         let q = DispatchQueue(label: "a4k.ane.encode")
-        var frameIndex = 0
+        let producerQ = DispatchQueue(label: "a4k.encode.producer")
         let start = Date()
-
+        var frameIndex = 0   // writer-side output count (appends) — drives progress
+        var pushed = 0        // producer-side count — drives PTS (FIFO == append order)
         var mlFailure: String?
-        func nextUpscaledFrame() -> (CVPixelBuffer, CMTime)? {
-            // Pull one BGRA frame off the ffmpeg stdout stream (blocks the queue
-            // thread until a full frame arrives — natural backpressure). nil = EOF
-            // or cancel; the buffer carries its own width/height so upscale reads
-            // dims from it directly.
-            guard let buf = source.nextFrame() else { return nil }
-            let pts = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
-            do {
-                let up = try upscaler.upscale(buf, targetScale: targetScale)
-                return (up, pts)
-            } catch {
-                mlFailure = "Upscale failed at frame \(frameIndex): \(error.localizedDescription)"
-                return nil
+
+        // --- Phase 4 ring: producer decodes+infers AHEAD of the writer through a
+        // bounded channel (capacity 2), so frame N+1 infers while frame N is
+        // appended to the writer. upscaler + source are each touched only from
+        // producerQ (serial), so the non-Sendable CoreML/MetalFX scaler and the
+        // RawVideoFrameSource state stay single-threaded. The channel is FIFO, so
+        // PTS assigned in push order == append order.
+        let channel = FrameChannel<(CVPixelBuffer, CMTime)>(capacity: 2)
+
+        // Phase 9 temporal-redundancy cache: dup/near-dup frames reuse the previous
+        // upscaled output (skip infer). Signature is read from the locked decoded
+        // buffer (144 luma samples, no full-frame copy).
+        var redundancy = FrameRedundancyCache()
+        var lastUpscaled: CVPixelBuffer?
+
+        producerQ.async {
+            while !isCancelled() {
+                guard let buf = source.nextFrame() else { break }   // EOF
+                let w = CVPixelBufferGetWidth(buf), h = CVPixelBufferGetHeight(buf)
+                let sig = Self.lumaSignature(buf, w: w, h: h)
+                let reuse = sig.map { redundancy.shouldReuse(signature: $0) } ?? false
+                let up: CVPixelBuffer
+                if reuse, let last = lastUpscaled {
+                    up = last                       // dup: reuse previous output, skip infer
+                } else {
+                    do { up = try upscaler.upscale(buf, targetScale: targetScale) }
+                    catch {
+                        mlFailure = "Upscale failed at frame \(pushed): \(error.localizedDescription)"
+                        break
+                    }
+                    lastUpscaled = up
+                    if let sig { redundancy.record(signature: sig) }
+                }
+                let pts = CMTime(value: CMTimeValue(pushed), timescale: CMTimeScale(fps))
+                pushed += 1
+                channel.push((up, pts))
             }
+            channel.close()
         }
 
-        // Drive video on a writer-ready callback (back-pressure, no busy-wait).
-        // videoDone: true = clean end-of-stream, false = cancelled OR ML failure.
+        // --- Consumer: the AVAssetWriter callback drains the channel. nil pop =
+        // producer hit EOF (clean) or broke on failure (mlFailure set). Order is
+        // preserved by the channel's FIFO. videoDone: true = clean EOS, false =
+        // cancelled OR ML failure.
         let videoDone = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             vInput.requestMediaDataWhenReady(on: q) {
                 while vInput.isReadyForMoreMediaData {
-                    if isCancelled() { source.cancel(); cont.resume(returning: false); return }
-                    guard let (buf, pts) = nextUpscaledFrame() else {
+                    if isCancelled() { source.cancel(); channel.close(); cont.resume(returning: false); return }
+                    guard let (buf, pts) = channel.pop() else {
                         vInput.markAsFinished(); cont.resume(returning: mlFailure == nil); return
                     }
                     adaptor.append(buf, withPresentationTime: pts)

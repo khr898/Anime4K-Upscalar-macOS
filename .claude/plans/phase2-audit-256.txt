@@ -1,0 +1,12 @@
+=== MLComputePlan Audit ===
+modelsDir: .claude/plans/models-v2
+macOS: Version 26.5.2 (Build 25F84)
+
+--- pipersr: MISSING /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/pipersr.mlpackage ---
+--- realesr-animevideov3 ---
+ops total: 193
+placement: ["ANE": 0, "CPU": 42, "GPU": 0, "nil": 151]
+unique op types: ["const", "ios17.add", "ios17.cast", "ios17.clip", "ios17.conv", "ios17.mul", "ios17.prelu", "pixel_shuffle", "upsample_nearest_neighbor"]
+CPU-FALLBACK OPS (42): ["ios17.mul", "ios17.cast", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "ios17.prelu", "ios17.conv", "pixel_shuffle", "upsample_nearest_neighbor", "ios17.add", "ios17.clip", "ios17.mul"]
+
+--- realesrgan-x4plus-anime: MISSING /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/realesrgan-x4plus-anime.mlpackage ---

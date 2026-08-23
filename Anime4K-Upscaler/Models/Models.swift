@@ -90,19 +90,17 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
     case modeAA_Fast  = 10
     case modeBB_Fast  = 11
     case modeCA_Fast  = 12
-    // No-Upscale Modes (13–15)
-    case modeAA_Fast_NoUp = 13
-    case modeA_HQ_NoUp    = 14
-    case modeAA_HQ_NoUp   = 15
     // Neural SR Modes (16-18)
     case esrgan_Fast    = 16
     case esrgan_Quality = 17
     case esrgan_General = 18
-    // Special ANE Modes (19-22)
+    // Special ANE/GPU Modes (19-24)
     case special_Fast    = 19
     case special_Quality = 20
     case special_SDRescue = 21
     case special_PiperSR_2x = 22
+    case special_MetalFX       = 23
+    case special_MetalFX_Sharp = 24
 
     var id: Int { rawValue }
 
@@ -113,6 +111,19 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
     var isSpecial: Bool {
         self == .special_Fast || self == .special_Quality || self == .special_SDRescue || self == .special_PiperSR_2x
     }
+
+    /// MetalFX GPU spatial upscaler — routes to MetalFXUpscaler, NOT the CoreML/ANE path.
+    /// `_Sharp` adds a contrast-gated unsharp-mask compute pass after the spatial upscale
+    /// (3DSnickerStream's anime-sharpen pattern: edges sharpened, flat areas left alone).
+    var isMetalFX: Bool { self == .special_MetalFX || self == .special_MetalFX_Sharp }
+
+    /// Special-neural modes (isSpecial) run a CoreML model with a fixed native
+    /// ratio (4× for animevideov3/RRDB, 2× for PiperSR). CoreMLUpscaler CAN
+    /// downscale a 4× model output to 2× on request, but that wastes a full 4×
+    /// inference pass, so the resolution picker is locked to `fixedScaleFactor`
+    /// for these. MetalFX, the shader pipeline, and ESRGAN-via-ncnn all accept
+    /// any target ratio, so the picker stays active for them.
+    var fixedScaleFactor: Int { self == .special_PiperSR_2x ? 2 : 4 }
 
     var modelName: String? {
         switch self {
@@ -144,16 +155,15 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
         case .modeAA_Fast:      return "Mode A+A (Fast)"
         case .modeBB_Fast:      return "Mode B+B (Fast)"
         case .modeCA_Fast:      return "Mode C+A (Fast)"
-        case .modeAA_Fast_NoUp: return "Mode A+A (Fast) [No Upscale]"
-        case .modeA_HQ_NoUp:    return "Mode A (HQ) [No Upscale]"
-        case .modeAA_HQ_NoUp:   return "Mode A+A (HQ) [No Upscale]"
         case .esrgan_Fast:      return "ESRGAN Fast"
         case .esrgan_Quality:   return "ESRGAN Quality"
         case .esrgan_General:   return "ESRGAN General"
-        case .special_Fast:     return "SPECIAL: Fast"
-        case .special_Quality:  return "SPECIAL: Quality"
-        case .special_SDRescue: return "SPECIAL: SD Rescue"
-        case .special_PiperSR_2x: return "SPECIAL: PiperSR 2x"
+        case .special_Fast:     return "Neural 4× Fast (animevideov3)"
+        case .special_Quality:  return "Neural 4× Quality (RRDB)"
+        case .special_SDRescue: return "Neural SD Rescue (restore + 4×)"
+        case .special_PiperSR_2x: return "Neural 2× (PiperSR, ANE-native)"
+        case .special_MetalFX:      return "MetalFX (Restore + GPU)"
+        case .special_MetalFX_Sharp: return "MetalFX + Sharpen (Restore + GPU)"
         }
     }
 
@@ -172,16 +182,15 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
         case .modeAA_Fast:      return "Double Restore → Upscale"
         case .modeBB_Fast:      return "Double Soft → Upscale"
         case .modeCA_Fast:      return "Denoise → Restore → Upscale"
-        case .modeAA_Fast_NoUp: return "Restore Only (Fast)"
-        case .modeA_HQ_NoUp:    return "Restore Only (HQ)"
-        case .modeAA_HQ_NoUp:   return "Double Restore Only (HQ)"
         case .esrgan_Fast:      return "Anime compact model (realesr-animevideov3)"
         case .esrgan_Quality:   return "High quality anime model (realesrgan-x4plus-anime)"
         case .esrgan_General:   return "General / live-action model (realesrgan-x4plus)"
-        case .special_Fast:     return "Core ML realesr-animevideov3 on Neural Engine"
-        case .special_Quality:  return "Core ML realesrgan-x4plus-anime on Neural Engine"
-        case .special_SDRescue: return "Anime4K Restore VL → Core ML realesr-animevideov3"
-        case .special_PiperSR_2x: return "Core ML PiperSR 2x ANE-native upscaler"
+        case .special_Fast:     return "Fast · high quality · CoreML animevideov3 on ANE, 4× upscale"
+        case .special_Quality:  return "Slow · best quality · CoreML RRDB 6B on ANE, 4× upscale"
+        case .special_SDRescue: return "Slow · high quality · Anime4K Restore VL → CoreML animevideov3 on ANE, 4×"
+        case .special_PiperSR_2x: return "Fast · high quality · CoreML PiperSR 2× ANE-native (best at 360p)"
+        case .special_MetalFX:      return "Fast · high quality · Anime4K Restore VL → Metal 4 / Metal 3 GPU spatial upscaler (2×/4× via selector)"
+        case .special_MetalFX_Sharp: return "Fast · high quality · Restore VL → Metal 4 / Metal 3 GPU upscaler → contrast-gated unsharp mask (anime edge sharpen)"
         }
     }
 
@@ -192,24 +201,22 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
             return .hq
         case .modeA_Fast, .modeB_Fast, .modeC_Fast, .modeAA_Fast, .modeBB_Fast, .modeCA_Fast:
             return .fast
-        case .modeAA_Fast_NoUp, .modeA_HQ_NoUp, .modeAA_HQ_NoUp:
-            return .noUpscale
         case .esrgan_Fast, .esrgan_Quality, .esrgan_General:
             return .neuralSR
-        case .special_Fast, .special_Quality, .special_SDRescue, .special_PiperSR_2x:
+        case .special_Fast, .special_Quality, .special_SDRescue, .special_PiperSR_2x, .special_MetalFX, .special_MetalFX_Sharp:
             return .special
         }
     }
 
-    /// Whether this mode involves spatial upscaling.
+    /// Whether this mode involves spatial upscaling (always true for all active modes).
     var involvesUpscaling: Bool {
-        category != .noUpscale
+        true
     }
 
     /// The ordered shader pipeline for this mode.
     /// Directly mapped from the reference shell script.
     var shaders: [Anime4KShader] {
-        if isNeuralSR || isSpecial { return [] }
+        if isNeuralSR || isSpecial || isMetalFX { return [] }
         switch self {
         case .modeA_HQ:
             return [
@@ -297,23 +304,6 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
                 .restoreCNN_S,
                 .upscaleCNN_x2_S
             ]
-        case .modeAA_Fast_NoUp:
-            return [
-                .clampHighlights,
-                .restoreCNN_M,
-                .restoreCNN_S
-            ]
-        case .modeA_HQ_NoUp:
-            return [
-                .clampHighlights,
-                .restoreCNN_VL
-            ]
-        case .modeAA_HQ_NoUp:
-            return [
-                .clampHighlights,
-                .restoreCNN_VL,
-                .restoreCNN_M
-            ]
         default:
             return []
         }
@@ -328,7 +318,6 @@ enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
     case neuralSR  = "Neural SR"
     case hq        = "Anime4K (HQ)"
     case fast      = "Anime4K (Fast)"
-    case noUpscale = "No Upscale Modes (Restore Only)"
 
     var id: String { rawValue }
 
@@ -341,7 +330,6 @@ enum ModeCategory: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .hq:        return "star.fill"
         case .fast:      return "hare.fill"
-        case .noUpscale: return "arrow.uturn.backward"
         case .neuralSR:  return "wand.and.stars"
         case .special:   return "bolt.fill"
         }

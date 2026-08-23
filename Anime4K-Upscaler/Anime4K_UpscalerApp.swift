@@ -2,6 +2,7 @@
 // Application entry point.
 
 import SwiftUI
+import Foundation
 
 @main
 struct Anime4K_UpscalerApp: App {

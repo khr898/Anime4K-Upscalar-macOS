@@ -131,6 +131,8 @@ struct ConfigurationPanel: View {
     @ViewBuilder
     private var resolutionSection: some View {
         @Bindable var viewModel = viewModel
+        let mode = viewModel.configuration.mode
+        let lockedToNative = mode.isSpecial   // fixed-ratio CoreML model (4×/2× native)
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
                 Label("Target Resolution", systemImage: "arrow.up.left.and.arrow.down.right")
@@ -143,11 +145,26 @@ struct ConfigurationPanel: View {
                     }
                 }
                 .pickerStyle(.segmented)
+                .disabled(lockedToNative)
+                .onChange(of: viewModel.configuration.mode) { newMode in
+                    // Snap to the model's native ratio when a fixed-ratio mode is
+                    // selected — the picker is disabled, so the value must follow.
+                    if newMode.isSpecial {
+                        viewModel.configuration.resolution =
+                            TargetResolution(rawValue: newMode.fixedScaleFactor) ?? .quadruple
+                    }
+                }
 
-                // Subtitle for selected resolution
-                Text(viewModel.configuration.resolution.subtitle)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                // Subtitle for selected resolution, or the lock reason when disabled.
+                if lockedToNative {
+                    Text("Locked to \(mode.fixedScaleFactor)× — \(mode.displayName) is a fixed-ratio neural model")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    Text(viewModel.configuration.resolution.subtitle)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
             }
             .padding(4)
         }

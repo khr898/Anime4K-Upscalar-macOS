@@ -26,4 +26,9 @@ Anime4K-Upscaler/Resources/VendoredDylibs/libplacebo.*.dylib
 
 # Tooling output
 graphify-out/
+ffmpeg_build/
+*.log
+__pycache__/
+*.mlmodelc
+.venv/
 

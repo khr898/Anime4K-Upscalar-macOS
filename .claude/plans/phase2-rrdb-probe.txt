@@ -1,0 +1,9 @@
+Torch version 2.7.1 has not been tested with coremltools. You may run into unexpected errors. Torch 2.7.0 is the most recent version that has been tested.
+downloading https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.2.4/RealESRGAN_x4plus_anime_6B.pth
+[13.8s] loaded RRDB state_dict
+Converting PyTorch Frontend ==> MIL Ops:   0%|          | 0/788 [00:00<?, ? ops/s]Converting PyTorch Frontend ==> MIL Ops: 100%|█████████▉| 787/788 [00:00<00:00, 8302.65 ops/s]
+Running MIL frontend_pytorch pipeline:   0%|          | 0/5 [00:00<?, ? passes/s]Running MIL frontend_pytorch pipeline: 100%|██████████| 5/5 [00:00<00:00, 171.49 passes/s]
+Running MIL default pipeline:   0%|          | 0/95 [00:00<?, ? passes/s]Running MIL default pipeline:  21%|██        | 20/95 [00:00<00:00, 197.37 passes/s]Running MIL default pipeline:  42%|████▏     | 40/95 [00:00<00:00, 150.17 passes/s]Running MIL default pipeline:  59%|█████▉    | 56/95 [00:00<00:00, 146.32 passes/s]Running MIL default pipeline:  75%|███████▍  | 71/95 [00:00<00:00, 79.51 passes/s] Running MIL default pipeline:  96%|█████████▌| 91/95 [00:00<00:00, 104.70 passes/s]Running MIL default pipeline: 100%|██████████| 95/95 [00:00<00:00, 108.43 passes/s]
+Running MIL backend_mlprogram pipeline:   0%|          | 0/12 [00:00<?, ? passes/s]Running MIL backend_mlprogram pipeline: 100%|██████████| 12/12 [00:00<00:00, 197.67 passes/s]
+saved /Volumes/My Shared Files/Windows Shared Folder/Anime4K-Upscalar/.claude/plans/models-v2/rrdb_probe/realesrgan-x4plus-anime.mlpackage (256x256)
+[61.8s] DONE

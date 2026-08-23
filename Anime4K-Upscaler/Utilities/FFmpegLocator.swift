@@ -124,7 +124,6 @@ struct FFmpegLocator {
             env["DYLD_LIBRARY_PATH"] = fwPath
             env["DYLD_FALLBACK_LIBRARY_PATH"] = fwPath
         }
-        env["FFREPORT"] = ""
         return env
     }()
 

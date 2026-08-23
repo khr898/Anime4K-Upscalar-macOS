@@ -1,0 +1,30 @@
+### macOS15_prelu
+ops total: 193
+placement: ["ANE": 0, "CPU": 42, "GPU": 0, "nil": 151]
+unique op types: ["const", "ios18.add", "ios18.cast", "ios18.clip", "ios18.conv", "ios18.mul", "ios18.prelu", "pixel_shuffle", "upsample_nearest_neighbor"]
+CPU-FALLBACK OPS (42): ["ios18.mul", "ios18.cast", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "pixel_shuffle", "upsample_nearest_neighbor", "ios18.add", "ios18.clip", "ios18.mul"]
+
+### iOS26_prelu
+ops total: 193
+placement: ["ANE": 0, "GPU": 0, "nil": 151, "CPU": 42]
+unique op types: ["const", "ios18.cast", "ios18.clip", "ios18.conv", "ios18.prelu", "ios19.add", "ios19.mul", "pixel_shuffle", "upsample_nearest_neighbor"]
+CPU-FALLBACK OPS (42): ["ios19.mul", "ios18.cast", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "ios18.prelu", "ios18.conv", "pixel_shuffle", "upsample_nearest_neighbor", "ios19.add", "ios18.clip", "ios19.mul"]
+
+### macOS14_silu
+ops total: 176
+placement: ["ANE": 0, "nil": 134, "CPU": 42, "GPU": 0]
+unique op types: ["const", "ios16.silu", "ios17.add", "ios17.cast", "ios17.clip", "ios17.conv", "ios17.mul", "pixel_shuffle", "upsample_nearest_neighbor"]
+CPU-FALLBACK OPS (42): ["ios17.mul", "ios17.cast", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "ios16.silu", "ios17.conv", "pixel_shuffle", "upsample_nearest_neighbor", "ios17.add", "ios17.clip", "ios17.mul"]
+
+### macOS15_silu
+ops total: 176
+placement: ["ANE": 0, "CPU": 42, "nil": 134, "GPU": 0]
+unique op types: ["const", "ios18.add", "ios18.cast", "ios18.clip", "ios18.conv", "ios18.mul", "ios18.silu", "pixel_shuffle", "upsample_nearest_neighbor"]
+CPU-FALLBACK OPS (42): ["ios18.mul", "ios18.cast", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "pixel_shuffle", "upsample_nearest_neighbor", "ios18.add", "ios18.clip", "ios18.mul"]
+
+### iOS26_silu
+ops total: 176
+placement: ["CPU": 42, "GPU": 0, "ANE": 0, "nil": 134]
+unique op types: ["const", "ios18.cast", "ios18.clip", "ios18.conv", "ios18.silu", "ios19.add", "ios19.mul", "pixel_shuffle", "upsample_nearest_neighbor"]
+CPU-FALLBACK OPS (42): ["ios19.mul", "ios18.cast", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "ios18.silu", "ios18.conv", "pixel_shuffle", "upsample_nearest_neighbor", "ios19.add", "ios18.clip", "ios19.mul"]
+
