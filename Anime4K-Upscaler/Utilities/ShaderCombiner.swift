@@ -25,7 +25,7 @@ struct ShaderCombiner {
 
         // Generate a deterministic filename from the shader names
         let key = shaders.map(\.rawValue).joined(separator: "+")
-        let filename = "combined_v2_\(key.hashValue & 0x7FFFFFFF).glsl"
+        let filename = "combined_v3_\(key.hashValue & 0x7FFFFFFF).glsl"
         let outputURL = cacheDir.appendingPathComponent(filename)
 
         // Only regenerate if not cached
@@ -45,7 +45,7 @@ struct ShaderCombiner {
         return outputURL.path
     }
 
-    /// Rewrites user-defined texture declarations and helper tokens (SAVE, BIND, .w, .h, _texOff, _tex, _pt, etc.)
+    /// Rewrites user-defined texture declarations and helper tokens (SAVE, BIND, .w, .h, _pos, _texOff, _tex, _pt, etc.)
     /// with a unique per-shader prefix to prevent texture memory aliasing across concatenated shaders in libplacebo.
     static func isolateShaderTextures(content: String, prefix: String) -> String {
         guard let savePattern = try? NSRegularExpression(pattern: #"//!SAVE\s+([A-Za-z0-9_]+)"#) else {
@@ -68,7 +68,7 @@ struct ShaderCombiner {
         let sortedTextures = userTextures.sorted { $0.count > $1.count }
         var result = content
         for tex in sortedTextures {
-            let patternStr = "\\b" + NSRegularExpression.escapedPattern(for: tex) + "(_texOff|_tex|_pt|_size|_rot|_mul|_map|_raw|\\.[wh]|\\b)"
+            let patternStr = "\\b" + NSRegularExpression.escapedPattern(for: tex) + "(_pos|_texOff|_tex|_pt|_size|_rot|_mul|_map|_raw|\\.[wh]|\\b)"
             if let regex = try? NSRegularExpression(pattern: patternStr) {
                 result = regex.stringByReplacingMatches(
                     in: result,

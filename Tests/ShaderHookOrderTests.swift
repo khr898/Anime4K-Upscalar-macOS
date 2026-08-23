@@ -88,6 +88,8 @@ struct ShaderHookOrderTests {
             check("MAIN is not prefixed in s0", s0.contains("//!HOOK MAIN"))
             check("MAIN is not prefixed in s1", s1.contains("//!SAVE MAIN"))
             check("MAIN is not prefixed in s2", s2.contains("//!SAVE MAIN"))
+            check("s1 properly prefixes _pos", s1.contains("s1_conv2d_tf_pos") && !s1.contains(" conv2d_tf_pos"))
+            check("s2 properly prefixes _pos", s2.contains("s2_conv2d_tf_pos") && !s2.contains(" conv2d_tf_pos"))
         } else {
             check("Failed to load shaders for isolation test", false)
         }
