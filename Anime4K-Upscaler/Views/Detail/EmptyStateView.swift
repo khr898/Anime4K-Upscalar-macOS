@@ -2,6 +2,7 @@
 // Placeholder view when no files are loaded.
 
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct EmptyStateView: View {
     @Environment(AppViewModel.self) private var viewModel

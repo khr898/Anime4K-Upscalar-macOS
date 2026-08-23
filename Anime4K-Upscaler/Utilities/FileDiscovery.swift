@@ -4,14 +4,14 @@
 import Foundation
 import UniformTypeIdentifiers
 
-public enum FileDiscovery {
+enum FileDiscovery {
     /// Resolves an array of file or directory URLs into a flattened, deduplicated,
     /// sorted list of valid `VideoFile` instances.
     /// - Parameters:
     ///   - urls: URLs selected via NSOpenPanel or received via Drag & Drop (may contain files, folders, or mixed).
     ///   - supportedExtensions: The set of allowed video file extensions (lowercase).
     /// - Returns: Sorted array of discovered `VideoFile` items.
-    public static func resolveVideoFiles(
+    static func resolveVideoFiles(
         from urls: [URL],
         supportedExtensions: Set<String> = SupportedVideoExtension.allExtensions
     ) -> [VideoFile] {
@@ -67,7 +67,7 @@ public enum FileDiscovery {
     }
 
     /// Resolves an array of file or directory URLs into a flattened array of raw video file URLs.
-    public static func resolveRawVideoURLs(
+    static func resolveRawVideoURLs(
         from urls: [URL],
         supportedExtensions: Set<String> = SupportedVideoExtension.allExtensions
     ) -> [URL] {
