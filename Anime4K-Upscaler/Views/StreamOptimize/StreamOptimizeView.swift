@@ -90,16 +90,19 @@ struct StreamOptimizeView: View {
                 Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") ready")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                Text("Select files or folders to enqueue")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Button {
-                viewModel.enqueueBatch()
+                viewModel.addAndEnqueueBatch()
             } label: {
-                Label("Add to Queue", systemImage: "plus.app")
+                Label(viewModel.files.isEmpty ? "Enqueue Batch..." : "Add to Queue", systemImage: "plus.app")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .disabled(viewModel.files.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -113,16 +116,14 @@ struct StreamOptimizeView: View {
             } label: {
                 Label("Add Files", systemImage: "plus")
             }
-            .help("Add video files to staging")
+            .help("Add video files or folders to staging")
 
-            if !viewModel.files.isEmpty {
-                Button {
-                    viewModel.enqueueBatch()
-                } label: {
-                    Label("Add to Queue", systemImage: "plus.app")
-                }
-                .help("Enqueue a batch with the current preset")
+            Button {
+                viewModel.addAndEnqueueBatch()
+            } label: {
+                Label("Add to Queue", systemImage: "plus.app")
             }
+            .help("Enqueue a batch with the current preset")
 
             if viewModel.canStartProcessing {
                 Button {
@@ -131,6 +132,7 @@ struct StreamOptimizeView: View {
                     Label("Optimize", systemImage: "play.fill")
                 }
                 .help("Start processing the queue")
+                .disabled(!viewModel.canStartProcessing)
             }
         } else {
             if viewModel.canStartProcessing {
@@ -141,7 +143,6 @@ struct StreamOptimizeView: View {
                 }
                 .help("Start processing the queue")
             }
-
             if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
@@ -1191,14 +1192,24 @@ private struct StreamOptimizeEmptyStateView: View {
                     .frame(maxWidth: 460)
             }
 
-            Button {
-                viewModel.addFiles()
-            } label: {
-                Label("Add Video Files", systemImage: "plus.circle.fill")
+            HStack(spacing: 12) {
+                Button {
+                    viewModel.addFiles()
+                } label: {
+                    Label("Add Files / Folders", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+                .controlSize(.large)
+
+                Button {
+                    viewModel.addAndEnqueueBatch()
+                } label: {
+                    Label("Enqueue Batch...", systemImage: "plus.app.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .tint(.teal)
-            .controlSize(.large)
 
             VStack(alignment: .leading, spacing: 8) {
                 featureBullet(icon: "bolt.horizontal.fill", text: "Faststart (moov atom) at file beginning for instant playback")

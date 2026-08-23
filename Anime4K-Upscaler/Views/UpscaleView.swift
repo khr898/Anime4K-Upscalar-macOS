@@ -104,16 +104,19 @@ struct UpscaleView: View {
                 Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") ready")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                Text("Select files or folders to enqueue")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Button {
-                viewModel.enqueueBatch()
+                viewModel.addAndEnqueueBatch()
             } label: {
-                Label("Add to Queue", systemImage: "plus.app")
+                Label(viewModel.files.isEmpty ? "Enqueue Batch..." : "Add to Queue", systemImage: "plus.app")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .disabled(viewModel.files.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -129,16 +132,14 @@ struct UpscaleView: View {
             } label: {
                 Label("Add Files", systemImage: "plus")
             }
-            .help("Add video files to staging")
+            .help("Add video files or folders to staging")
 
-            if !viewModel.files.isEmpty {
-                Button {
-                    viewModel.enqueueBatch()
-                } label: {
-                    Label("Add to Queue", systemImage: "plus.app")
-                }
-                .help("Enqueue a batch with the current preset")
+            Button {
+                viewModel.addAndEnqueueBatch()
+            } label: {
+                Label("Add to Queue", systemImage: "plus.app")
             }
+            .help("Enqueue a batch with the current preset")
 
             if viewModel.canStartProcessing {
                 Button {

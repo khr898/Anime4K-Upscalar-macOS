@@ -175,9 +175,6 @@ struct FileListView: View {
                         return
                     }
 
-                    let ext = url.pathExtension.lowercased()
-                    guard SupportedVideoExtension.allExtensions.contains(ext) else { return }
-
                     Task { @MainActor in
                         viewModel.addFilesFromDrop([url])
                     }

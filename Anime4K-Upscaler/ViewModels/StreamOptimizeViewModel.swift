@@ -90,35 +90,49 @@ final class StreamOptimizeViewModel {
     var selectedFileID: UUID?
 
     // MARK: - File Management
-    // Mirrors CompressViewModel so the Stream Optimize sidebar behaves like the
-    // Upscale/Compress tabs: add via picker or drag-and-drop, remove per-file or
-    // all. Files added here coexist with files populated by scanSourceDirectory.
 
+    /// Add video files via NSOpenPanel (supports files, folders, or mixed selections).
     func addFiles() {
         let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
         guard !urls.isEmpty else { return }
-        for url in urls {
-            guard !files.contains(where: { $0.url == url }) else { continue }
-            let ext = url.pathExtension.lowercased()
-            guard Self.supportedExtensions.contains(ext) else { continue }
-            var videoFile = VideoFile(url: url)
-            videoFile.bookmarkData = SecurityScopeManager.shared.createBookmark(for: url)
+
+        let discovered = FileDiscovery.resolveVideoFiles(from: urls)
+        for videoFile in discovered {
+            guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
             files.append(videoFile)
         }
+        probeFiles()
         if selectedFileID == nil { selectedFileID = files.first?.id }
     }
 
+    /// Add video files from drag-and-drop URLs (files, folders, or mixed selections).
     func addFilesFromDrop(_ urls: [URL]) {
-        for url in urls {
-            guard !files.contains(where: { $0.url == url }) else { continue }
-            let ext = url.pathExtension.lowercased()
-            guard Self.supportedExtensions.contains(ext) else { continue }
-            SecurityScopeManager.shared.startAccessing(url)
-            var videoFile = VideoFile(url: url)
-            videoFile.bookmarkData = SecurityScopeManager.shared.createBookmark(for: url)
+        let discovered = FileDiscovery.resolveVideoFiles(from: urls)
+        for videoFile in discovered {
+            guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
             files.append(videoFile)
         }
+        probeFiles()
         if selectedFileID == nil { selectedFileID = files.first?.id }
+    }
+
+    /// Enqueue a batch immediately: if staging has files, enqueues them; if staging
+    /// is empty, prompts file/folder picker, stages them, and enqueues in one action.
+    func addAndEnqueueBatch() {
+        if files.isEmpty {
+            let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
+            guard !urls.isEmpty else { return }
+
+            let discovered = FileDiscovery.resolveVideoFiles(from: urls)
+            guard !discovered.isEmpty else { return }
+
+            for videoFile in discovered {
+                guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
+                files.append(videoFile)
+            }
+            probeFiles()
+        }
+        enqueueBatch()
     }
 
     func removeFile(id: UUID) {
@@ -194,8 +208,8 @@ final class StreamOptimizeViewModel {
 
     private static let uiUpdateIntervalMs: Int = 100
 
-    /// Supported extensions for stream optimization (matching the shell function).
-    private static let supportedExtensions: Set<String> = ["mkv", "mp4", "webm"]
+    /// Supported extensions for stream optimization.
+    private static let supportedExtensions: Set<String> = SupportedVideoExtension.allExtensions
 
     // MARK: - Directory Management
 

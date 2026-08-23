@@ -91,16 +91,19 @@ struct CompressView: View {
                 Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") ready")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            } else {
+                Text("Select files or folders to enqueue")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Spacer()
             Button {
-                viewModel.enqueueBatch()
+                viewModel.addAndEnqueueBatch()
             } label: {
-                Label("Add to Queue", systemImage: "plus.app")
+                Label(viewModel.files.isEmpty ? "Enqueue Batch..." : "Add to Queue", systemImage: "plus.app")
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
-            .disabled(viewModel.files.isEmpty)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
@@ -114,16 +117,14 @@ struct CompressView: View {
             } label: {
                 Label("Add Files", systemImage: "plus")
             }
-            .help("Add video files to staging")
+            .help("Add video files or folders to staging")
 
-            if !viewModel.files.isEmpty {
-                Button {
-                    viewModel.enqueueBatch()
-                } label: {
-                    Label("Add to Queue", systemImage: "plus.app")
-                }
-                .help("Enqueue a batch with the current preset")
+            Button {
+                viewModel.addAndEnqueueBatch()
+            } label: {
+                Label("Add to Queue", systemImage: "plus.app")
             }
+            .help("Enqueue a batch with the current preset")
 
             if viewModel.canStartProcessing {
                 Button {
@@ -143,7 +144,6 @@ struct CompressView: View {
                 }
                 .help("Start processing the queue")
             }
-
             if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
@@ -167,6 +167,7 @@ struct CompressView: View {
 
 private struct CompressEmptyStateView: View {
     @Environment(CompressViewModel.self) private var viewModel
+    @State private var isTargeted: Bool = false
 
     var body: some View {
         VStack(spacing: 16) {
@@ -181,17 +182,27 @@ private struct CompressEmptyStateView: View {
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Add video files to compress with visually lossless quality")
+            Text("Add video files or folders to compress with visually lossless quality")
                 .font(.body)
                 .foregroundStyle(.secondary)
 
-            Button {
-                viewModel.addFiles()
-            } label: {
-                Label("Add Files", systemImage: "plus.circle.fill")
+            HStack(spacing: 12) {
+                Button {
+                    viewModel.addFiles()
+                } label: {
+                    Label("Add Files / Folders", systemImage: "plus.circle.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.large)
+
+                Button {
+                    viewModel.addAndEnqueueBatch()
+                } label: {
+                    Label("Enqueue Batch...", systemImage: "plus.app.fill")
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.large)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.large)
             .padding(.top, 4)
 
             VStack(alignment: .leading, spacing: 4) {
@@ -206,7 +217,34 @@ private struct CompressEmptyStateView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background {
+            if isTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.orange.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .padding(16)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            handleDrop(providers)
+        }
         .background(.background)
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var didAdd = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+                    guard let data = data as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil, isAbsolute: true) else { return }
+                    Task { @MainActor in
+                        viewModel.addFilesFromDrop([url])
+                    }
+                }
+                didAdd = true
+            }
+        }
+        return didAdd
     }
 
     private func featureRow(symbol: String, text: String) -> some View {
@@ -342,8 +380,6 @@ private struct CompressFileListView: View {
                 provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
                     guard let data = data as? Data,
                           let url = URL(dataRepresentation: data, relativeTo: nil, isAbsolute: true) else { return }
-                    let ext = url.pathExtension.lowercased()
-                    guard SupportedVideoExtension.allExtensions.contains(ext) else { return }
                     Task { @MainActor in
                         viewModel.addFilesFromDrop([url])
                     }

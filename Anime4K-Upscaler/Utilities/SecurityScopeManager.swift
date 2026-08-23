@@ -101,24 +101,28 @@ final class SecurityScopeManager: @unchecked Sendable {
 
     // MARK: - File Picker
 
-    /// Present an NSOpenPanel configured for video file selection.
-    /// - Parameter allowMultiple: Whether to allow selecting multiple files.
-    /// - Returns: Array of selected video file URLs with security-scoped access started.
+    /// Present an NSOpenPanel configured for video file and folder selection.
+    /// - Parameter allowMultiple: Whether to allow selecting multiple files and folders.
+    /// - Returns: Array of selected video file or directory URLs with security-scoped access started.
     @MainActor
     func presentVideoFilePicker(allowMultiple: Bool = true) -> [URL] {
         let panel = NSOpenPanel()
         panel.canChooseFiles = true
-        panel.canChooseDirectories = false
+        panel.canChooseDirectories = true
         panel.allowsMultipleSelection = allowMultiple
-        panel.title = "Select Video Files"
-        panel.message = "Choose video files to process with Anime4K"
+        panel.title = "Select Video Files or Folders"
+        panel.message = "Choose video files or entire folders to process with Anime4K"
 
-        // Configure allowed content types
-        var contentTypes: [UTType] = []
-        contentTypes.append(.movie)
-        contentTypes.append(.mpeg4Movie)
-        contentTypes.append(.quickTimeMovie)
-        contentTypes.append(.avi)
+        // Configure allowed content types: video types and folder/directory types
+        var contentTypes: [UTType] = [
+            .movie,
+            .video,
+            .mpeg4Movie,
+            .quickTimeMovie,
+            .avi,
+            .folder,
+            .directory
+        ]
         if let mkv = UTType("org.matroska.mkv") {
             contentTypes.append(mkv)
         }
@@ -127,6 +131,9 @@ final class SecurityScopeManager: @unchecked Sendable {
         }
         if let ts = UTType("public.mpeg-2-transport-stream") {
             contentTypes.append(ts)
+        }
+        if let flv = UTType("com.adobe.flash.video") {
+            contentTypes.append(flv)
         }
         panel.allowedContentTypes = contentTypes
 

@@ -32,3 +32,5 @@ __pycache__/
 *.mlmodelc
 .venv/
 .claude/
+*.app/
+dist/

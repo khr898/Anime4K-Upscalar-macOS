@@ -89,17 +89,14 @@ final class CompressViewModel {
 
     // MARK: - File Management
 
+    /// Add video files via NSOpenPanel (supports files, folders, or mixed selections).
     func addFiles() {
         let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
         guard !urls.isEmpty else { return }
 
-        for url in urls {
-            guard !files.contains(where: { $0.url == url }) else { continue }
-            let ext = url.pathExtension.lowercased()
-            guard SupportedVideoExtension.allExtensions.contains(ext) else { continue }
-
-            var videoFile = VideoFile(url: url)
-            videoFile.bookmarkData = SecurityScopeManager.shared.createBookmark(for: url)
+        let discovered = FileDiscovery.resolveVideoFiles(from: urls)
+        for videoFile in discovered {
+            guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
             files.append(videoFile)
         }
 
@@ -110,15 +107,11 @@ final class CompressViewModel {
         }
     }
 
+    /// Add video files from drag-and-drop URLs (files, folders, or mixed selections).
     func addFilesFromDrop(_ urls: [URL]) {
-        for url in urls {
-            guard !files.contains(where: { $0.url == url }) else { continue }
-            let ext = url.pathExtension.lowercased()
-            guard SupportedVideoExtension.allExtensions.contains(ext) else { continue }
-
-            SecurityScopeManager.shared.startAccessing(url)
-            var videoFile = VideoFile(url: url)
-            videoFile.bookmarkData = SecurityScopeManager.shared.createBookmark(for: url)
+        let discovered = FileDiscovery.resolveVideoFiles(from: urls)
+        for videoFile in discovered {
+            guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
             files.append(videoFile)
         }
 
@@ -127,6 +120,25 @@ final class CompressViewModel {
         if selectedFileID == nil {
             selectedFileID = files.first?.id
         }
+    }
+
+    /// Enqueue a batch immediately: if staging has files, enqueues them; if staging
+    /// is empty, prompts file/folder picker, stages them, and enqueues in one action.
+    func addAndEnqueueBatch() {
+        if files.isEmpty {
+            let urls = SecurityScopeManager.shared.presentVideoFilePicker(allowMultiple: true)
+            guard !urls.isEmpty else { return }
+
+            let discovered = FileDiscovery.resolveVideoFiles(from: urls)
+            guard !discovered.isEmpty else { return }
+
+            for videoFile in discovered {
+                guard !files.contains(where: { $0.url == videoFile.url }) else { continue }
+                files.append(videoFile)
+            }
+            probeNewFiles()
+        }
+        enqueueBatch()
     }
 
     func removeFile(id: UUID) {
