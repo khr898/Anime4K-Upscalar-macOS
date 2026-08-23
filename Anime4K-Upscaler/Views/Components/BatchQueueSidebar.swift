@@ -17,6 +17,7 @@ import SwiftUI
 
 /// Minimal shape a batch type exposes to the sidebar. `Batch<Config,Job>` conforms
 /// via an extension below.
+@MainActor
 protocol BatchItemLike: AnyObject, Identifiable {
     var state: BatchState { get }
     var fileCount: Int { get }

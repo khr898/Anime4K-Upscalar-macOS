@@ -325,11 +325,12 @@ final class StreamOptimizeJob: Identifiable {
 
     @ObservationIgnored var processHandle: Process?
 
-    init(file: VideoFile, configuration: StreamOptimizeConfiguration, destinationDirectory: URL) {
+    init(file: VideoFile, configuration: StreamOptimizeConfiguration, destinationDirectory: URL? = nil) {
         self.id = UUID()
         self.file = file
         self.configuration = configuration
-        self.outputURL = destinationDirectory.appendingPathComponent("\(file.fileName)_streaming.mp4")
+        let baseDir = destinationDirectory ?? file.url.deletingLastPathComponent()
+        self.outputURL = baseDir.appendingPathComponent("\(file.fileName)_streaming.mp4")
     }
 
     var elapsedTime: TimeInterval? {
