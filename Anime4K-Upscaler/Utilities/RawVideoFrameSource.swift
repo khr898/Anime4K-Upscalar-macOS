@@ -39,8 +39,9 @@ final class RawVideoFrameSource {
         // so restore-shader .videoToolbox collapses to .default and relies on
         // the .softwareDav1d fallback for AV1 sources.
         if usesRestoreShader {
-            let vf = "hwupload,libplacebo=custom_shader_path=\(shaderPath):format=p010le,hwdownload,format=p010le"
-            var a = ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y"]
+            let escapedPath = shaderPath.replacingOccurrences(of: "'", with: "'\\''")
+            let vf = "hwupload,libplacebo=custom_shader_path='\(escapedPath)':format=p010le,hwdownload,format=p010le"
+            var a = ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y", "-filter_threads", "1"]
             if mode == .softwareDav1d { a += ["-c:v", "libdav1d"] }
             a += ["-i", inputPath, "-vf", vf, "-pix_fmt", "bgra", "-f", "rawvideo", "pipe:1"]
             return a

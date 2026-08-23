@@ -25,8 +25,16 @@ final class MetalFXUpscaler {
     private let device: MTLDevice
     private let queue: MTLCommandQueue
     private var scaler: MTLFXSpatialScaler?
-    private var outTexture: MTLTexture?
-    private var outPixelBuffer: CVPixelBuffer?
+    private struct OutputSlot {
+        let outPixelBuffer: CVPixelBuffer
+        let outTexture: MTLTexture
+        let scalerReadView: MTLTexture?
+        let sharpPixelBuffer: CVPixelBuffer?
+        let sharpTexture: MTLTexture?
+    }
+
+    private var outputSlots: [OutputSlot] = []
+    private var slotIndex = 0
     private var cachedInW = 0, cachedInH = 0, cachedOutW = 0, cachedOutH = 0
 
     /// Optional contrast-gated unsharp-mask pass after the spatial upscale
@@ -34,9 +42,6 @@ final class MetalFXUpscaler {
     /// When nil, upscale() returns the scaler output directly.
     private let applySharpen: Bool
     private var sharpenPipeline: MTLComputePipelineState?
-    private var sharpTexture: MTLTexture?       // non-srgb view of sharpPixelBuffer (compute writes here)
-    private var sharpPixelBuffer: CVPixelBuffer?
-    private var scalerReadView: MTLTexture?     // non-srgb read view of outPixelBuffer (compute input)
 
     enum Error: LocalizedError {
         case noDevice, unsupportedDevice, scalerInit(String), noCommandBuffer
@@ -84,12 +89,18 @@ final class MetalFXUpscaler {
         let outW = inW * targetScale, outH = inH * targetScale
         try ensureScaler(inW: inW, inH: inH, outW: outW, outH: outH)
 
-        let inTexture = try makeTexture(from: input, width: inW, height: inH, usage: .shaderRead)
-        guard let scaler, let outTexture, let outPB = outPixelBuffer else {
+        guard let scaler, !outputSlots.isEmpty else {
             throw Error.scalerInit("scaler not initialized for \(inW)x\(inH) → \(outW)x\(outH)")
         }
+
+        // Cycle through triple-buffer ring to ensure non-aliased backing memory
+        // while downstream AVAssetWriter asynchronously encodes previous frame.
+        let slot = outputSlots[slotIndex]
+        slotIndex = (slotIndex + 1) % outputSlots.count
+
+        let inTexture = try makeTexture(from: input, width: inW, height: inH, usage: .shaderRead)
         scaler.colorTexture = inTexture
-        scaler.outputTexture = outTexture
+        scaler.outputTexture = slot.outTexture
 
         // Pass 1: MetalFX spatial upscale. Committed + waited before the sharpen
         // compute reads the output — a second command buffer avoids any
@@ -100,9 +111,9 @@ final class MetalFXUpscaler {
         cmd.waitUntilCompleted()
 
         guard applySharpen, let pipeline = sharpenPipeline,
-              let readView = scalerReadView, let sharpTex = sharpTexture,
-              let sharpPB = sharpPixelBuffer else {
-            return outPB
+              let readView = slot.scalerReadView, let sharpTex = slot.sharpTexture,
+              let sharpPB = slot.sharpPixelBuffer else {
+            return slot.outPixelBuffer
         }
 
         // Pass 2: contrast-gated unsharp mask. Reads the scaler output (non-srgb
@@ -140,34 +151,49 @@ final class MetalFXUpscaler {
         }
         self.scaler = scaler
 
-        // Output CVPixelBuffer: IOSurface-backed + Metal-compatible so a MTLTexture
-        // can wrap it zero-copy. The AVAssetWriterInputPixelBufferAdaptor reads
-        // this buffer directly after the GPU pass completes.
+        // Allocate a 3-buffer ring (triple buffer) of IOSurface-backed + Metal-compatible
+        // CVPixelBuffers. This prevents downstream AVAssetWriter from reading from memory
+        // being concurrently overwritten by the next frame.
         let pbAttrs: [CFString: Any] = [
             kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any],
             kCVPixelBufferMetalCompatibilityKey: true,
         ]
-        var pb: CVPixelBuffer?
-        CVPixelBufferCreate(kCFAllocatorDefault, outW, outH,
-                            kCVPixelFormatType_32BGRA, pbAttrs as CFDictionary, &pb)
-        guard let outPB = pb else { throw Error.outputBufferCreate }
-        self.outPixelBuffer = outPB
-        self.outTexture = try makeTexture(from: outPB, width: outW, height: outH, usage: .shaderWrite)
 
-        if applySharpen {
-            // Non-srgb view of the SAME outPixelBuffer for the compute read: the
-            // IOSurface bytes are sRGB-encoded; reading as bgra8Unorm (no
-            // linearization) gives the raw sRGB values → perceptual-space sharpen.
-            self.scalerReadView = try makeTexture(from: outPB, width: outW, height: outH,
-                                                  usage: .shaderRead, pixelFormat: .bgra8Unorm)
-            var spb: CVPixelBuffer?
+        var newSlots: [OutputSlot] = []
+        for _ in 0..<3 {
+            var pb: CVPixelBuffer?
             CVPixelBufferCreate(kCFAllocatorDefault, outW, outH,
-                                kCVPixelFormatType_32BGRA, pbAttrs as CFDictionary, &spb)
-            guard let sharpPB = spb else { throw Error.outputBufferCreate }
-            self.sharpPixelBuffer = sharpPB
-            self.sharpTexture = try makeTexture(from: sharpPB, width: outW, height: outH,
-                                                usage: .shaderWrite, pixelFormat: .bgra8Unorm)
+                                kCVPixelFormatType_32BGRA, pbAttrs as CFDictionary, &pb)
+            guard let outPB = pb else { throw Error.outputBufferCreate }
+            let outTex = try makeTexture(from: outPB, width: outW, height: outH, usage: .shaderWrite)
+
+            var readView: MTLTexture?
+            var sharpPB: CVPixelBuffer?
+            var sharpTex: MTLTexture?
+
+            if applySharpen {
+                readView = try makeTexture(from: outPB, width: outW, height: outH,
+                                           usage: .shaderRead, pixelFormat: .bgra8Unorm)
+                var spb: CVPixelBuffer?
+                CVPixelBufferCreate(kCFAllocatorDefault, outW, outH,
+                                    kCVPixelFormatType_32BGRA, pbAttrs as CFDictionary, &spb)
+                guard let createdSharpPB = spb else { throw Error.outputBufferCreate }
+                sharpPB = createdSharpPB
+                sharpTex = try makeTexture(from: createdSharpPB, width: outW, height: outH,
+                                           usage: .shaderWrite, pixelFormat: .bgra8Unorm)
+            }
+
+            newSlots.append(OutputSlot(
+                outPixelBuffer: outPB,
+                outTexture: outTex,
+                scalerReadView: readView,
+                sharpPixelBuffer: sharpPB,
+                sharpTexture: sharpTex
+            ))
         }
+
+        self.outputSlots = newSlots
+        self.slotIndex = 0
         cachedInW = inW; cachedInH = inH; cachedOutW = outW; cachedOutH = outH
     }
 

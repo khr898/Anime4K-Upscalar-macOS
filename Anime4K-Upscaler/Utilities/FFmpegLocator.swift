@@ -124,6 +124,16 @@ struct FFmpegLocator {
             env["DYLD_LIBRARY_PATH"] = fwPath
             env["DYLD_FALLBACK_LIBRARY_PATH"] = fwPath
         }
+
+        // MoltenVK Synchronization & Stability Configuration:
+        // Prevents Read-After-Write (RAW) race conditions, flickering, and diagonal
+        // stair-stepped triangle artifacts across multi-pass Anime4K GLSL shader pipelines
+        // on Apple Silicon Tile-Based Deferred Rendering (TBDR) GPUs.
+        env["MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS"] = "1"     // Process queue submissions synchronously on calling thread
+        env["MVK_CONFIG_PREFILL_METAL_COMMAND_BUFFERS"] = "0" // Disable prefilling to prevent inter-pass command races
+        env["MVK_CONFIG_USE_COMMAND_TASK_POOL"] = "0"         // Disable asynchronous command task pool
+        env["MVK_CONFIG_TEXTURE_BARRIERS"] = "1"              // Enforce strict intermediate render-target texture barriers
+
         return env
     }()
 

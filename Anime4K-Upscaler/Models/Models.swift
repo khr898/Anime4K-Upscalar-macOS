@@ -951,9 +951,11 @@ struct FFmpegArgumentBuilder {
         // Initialize Vulkan hardware device for libplacebo
         args.append(contentsOf: ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk"])
 
-        // Overwrite output, input file
+        // Overwrite output, multi-threaded decode/encode, single-threaded filter serialization
         args.append(contentsOf: ["-y"])
         args.append(contentsOf: ["-threads", "0"])
+        args.append(contentsOf: ["-filter_threads", "1"])
+        args.append(contentsOf: ["-filter_complex_threads", "1"])
         args.append(contentsOf: ["-i", inputURL.path])
 
         // Video filter graph

@@ -53,12 +53,13 @@ struct DecodeArgsTests {
         }
 
         // --- SDRescue (Vulkan libplacebo Restore VL chain) ---
-        let sdrVF = "hwupload,libplacebo=custom_shader_path=\(shader):format=p010le,hwdownload,format=p010le"
+        let escapedShader = shader.replacingOccurrences(of: "'", with: "'\\''")
+        let sdrVF = "hwupload,libplacebo=custom_shader_path='\(escapedShader)':format=p010le,hwdownload,format=p010le"
         do {
             let a = RawVideoFrameSource.streamArgs(mode: .default, inputPath: input,
                                                     usesRestoreShader: true, shaderPath: shader)
             check("sdr default chain",
-                  a == ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y",
+                  a == ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y", "-filter_threads", "1",
                         "-i", input, "-vf", sdrVF, "-pix_fmt", "bgra", "-f", "rawvideo", "pipe:1"],
                   "got \(a)")
         }
@@ -75,7 +76,7 @@ struct DecodeArgsTests {
             let a = RawVideoFrameSource.streamArgs(mode: .softwareDav1d, inputPath: input,
                                                     usesRestoreShader: true, shaderPath: shader)
             check("sdr softwareDav1d forces libdav1d decoder before -i",
-                  a == ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y",
+                  a == ["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-y", "-filter_threads", "1",
                         "-c:v", "libdav1d", "-i", input, "-vf", sdrVF, "-pix_fmt", "bgra",
                         "-f", "rawvideo", "pipe:1"],
                   "got \(a)")
