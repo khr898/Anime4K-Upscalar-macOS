@@ -1,7 +1,7 @@
 # Anime4K Upscaler
 
 ![macOS](https://img.shields.io/badge/Platform-macOS%2014.0%2B-blue)
-![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon%20%7C%20Intel-green)
+![Architecture](https://img.shields.io/badge/Architecture-Apple%20Silicon-green)
 ![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange)
 ![Metal](https://img.shields.io/badge/Metal-Metal%204%20%7C%20Metal%203-purple)
 ![FFmpeg](https://img.shields.io/badge/FFmpeg-9.0-red)
@@ -72,7 +72,7 @@ The 21 active upscaling modes are organized into four dedicated categories:
 ## System Requirements
 
 - **Operating System**: macOS 14.0 (Sonoma) or later
-- **Architecture**: Apple Silicon (M1/M2/M3/M4 series recommended) or Intel x86_64 Mac with Metal support
+- **Architecture**: Apple Silicon (M1/M2/M3/M4 series)
 - **Hardware Acceleration**: Apple Neural Engine (ANE) and Metal-compatible GPU
 
 ---
