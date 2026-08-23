@@ -22,6 +22,7 @@ final class CompressViewModel {
 
     var encoder: CompressEncoder = .hevcVideoToolbox
     var quality: Int = 68
+    var svtAV1Preset: Int = 4
     var contentType: ContentType = .liveAction
     var bFrames: Int = 3
     var longGOPEnabled: Bool = false
@@ -197,7 +198,8 @@ final class CompressViewModel {
     }
 
     var canStartProcessing: Bool {
-        batches.contains(where: { $0.state == .pending }) && !isQueueProcessing
+        !isQueueProcessing
+            && (batches.contains(where: { $0.state == .pending }) || !files.isEmpty)
     }
 
     /// Snapshot of the current UI config fields into a `CompressConfiguration`.
@@ -205,6 +207,7 @@ final class CompressViewModel {
         CompressConfiguration(
             encoder: encoder,
             quality: quality,
+            svtAV1Preset: svtAV1Preset,
             contentType: contentType,
             bFrames: bFrames,
             longGOPEnabled: longGOPEnabled
@@ -275,8 +278,14 @@ final class CompressViewModel {
     }
 
     /// Start running the queue. Add-while-running works: `enqueueBatch` appends
-    /// during the run and the runner picks it up next loop turn.
+    /// during the run and the runner picks it up next loop turn. If files are
+    /// still staged with no pending batch, enqueue them first so a manual
+    /// "Add to Queue" isn't required.
     func startProcessing() {
+        if !files.isEmpty && !batches.contains(where: { $0.state == .pending }) {
+            enqueueBatch()
+            guard batches.contains(where: { $0.state == .pending }) else { return }
+        }
         executeQueue()
     }
 

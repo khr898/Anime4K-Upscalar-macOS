@@ -115,6 +115,7 @@ enum HDRMode: String, Sendable {
 struct CompressConfiguration: Sendable, Equatable {
     var encoder: CompressEncoder = .hevcVideoToolbox
     var quality: Int = 68
+    var svtAV1Preset: Int = 4
     var contentType: ContentType = .liveAction
     var bFrames: Int = 3
     var longGOPEnabled: Bool = false
@@ -222,7 +223,7 @@ struct CompressArgumentBuilder {
 
             args.append(contentsOf: [
                 "-c:v", "libsvtav1",
-                "-preset", "4",
+                "-preset", "\(configuration.svtAV1Preset)",
                 "-crf", "\(configuration.quality)",
                 "-pix_fmt", "yuv420p10le",
                 "-svtav1-params", svtParams

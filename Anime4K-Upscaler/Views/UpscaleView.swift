@@ -18,6 +18,7 @@ struct UpscaleView: View {
                 onCancel: { viewModel.cancelBatch(id: $0) },
                 onDelete: { viewModel.deleteBatch(id: $0) },
                 onNewBatch: { viewModel.returnToConfiguration() },
+                onStartQueue: { viewModel.startProcessing() },
                 summary: { batch in
                     "\(batch.configuration.mode.displayName) · \(batch.configuration.resolution.displayName) · \(batch.configuration.codec.displayName)"
                 }

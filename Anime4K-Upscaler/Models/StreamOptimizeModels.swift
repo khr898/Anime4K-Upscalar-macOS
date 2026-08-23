@@ -289,6 +289,7 @@ enum KeyframeInterval: String, CaseIterable, Identifiable, Sendable {
 struct StreamOptimizeConfiguration: Sendable, Equatable {
     var encoder: StreamEncoder         = .hevcVideoToolbox
     var quality: Int                   = 65
+    var svtAV1Preset: Int              = 6
     var profile: StreamProfile         = .main10
     var pixelFormat: StreamPixelFormat = .p010le
     var audioMode: StreamAudioMode     = .copy
@@ -417,7 +418,7 @@ struct StreamOptimizeArgumentBuilder {
         case .svtAV1:
             args.append(contentsOf: [
                 "-c:v", "libsvtav1",
-                "-preset", "6",
+                "-preset", "\(configuration.svtAV1Preset)",
                 "-crf", "\(configuration.quality)",
                 "-pix_fmt", configuration.pixelFormat.rawValue,
                 "-svtav1-params", "tune=0"

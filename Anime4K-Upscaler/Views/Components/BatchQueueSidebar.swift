@@ -66,6 +66,7 @@ struct BatchQueueSidebar<Item: BatchItemLike>: View where Item.ID == UUID {
     let onCancel: (UUID) -> Void
     let onDelete: (UUID) -> Void
     let onNewBatch: () -> Void
+    var onStartQueue: (() -> Void)? = nil
     /// Tab-specific preset summary, e.g. "Mode A · 2x · HEVC".
     let summary: (Item) -> String
 
@@ -121,14 +122,29 @@ struct BatchQueueSidebar<Item: BatchItemLike>: View where Item.ID == UUID {
 
             Divider()
 
-            // New Batch affordance — returns to the staging/config detail.
-            Button {
-                onNewBatch()
-            } label: {
-                Label("New Batch", systemImage: "plus.circle")
-                    .frame(maxWidth: .infinity, alignment: .leading)
+            // Footer with New Batch and optional Start Queue
+            HStack {
+                Button {
+                    onNewBatch()
+                } label: {
+                    Label("New Batch", systemImage: "plus.circle")
+                }
+                .buttonStyle(.plain)
+
+                Spacer()
+
+                if let onStartQueue, items.contains(where: { $0.state == .pending }) {
+                    Button {
+                        onStartQueue()
+                    } label: {
+                        Label("Start Queue", systemImage: "play.fill")
+                            .font(.caption)
+                            .fontWeight(.medium)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                }
             }
-            .buttonStyle(.plain)
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
             .background(selection == nil ? Color.accentColor.opacity(0.08) : Color.clear)

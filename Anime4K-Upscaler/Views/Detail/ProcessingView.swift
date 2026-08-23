@@ -211,7 +211,16 @@ struct ProcessingView: View {
             }
 
             // Action buttons
-            if viewModel.isQueueProcessing {
+            if viewModel.canStartProcessing && !viewModel.isQueueProcessing && !viewModel.allJobsFinished {
+                Button {
+                    viewModel.startProcessing()
+                } label: {
+                    Label("Start Processing", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.blue)
+                .controlSize(.small)
+            } else if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {

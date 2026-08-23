@@ -15,15 +15,19 @@ final class StreamOptimizeViewModel {
 
     // MARK: - Directory State
 
-    var sourceDirectoryURL: URL?
     var destinationDirectoryURL: URL?
-
-    var sourceDisplayName: String {
-        sourceDirectoryURL?.lastPathComponent ?? "Not selected"
-    }
 
     var destinationDisplayName: String {
         destinationDirectoryURL?.lastPathComponent ?? "Not selected"
+    }
+
+    var outputDirectoryURL: URL? {
+        get { destinationDirectoryURL }
+        set { destinationDirectoryURL = newValue }
+    }
+
+    var outputDirectoryDisplayName: String {
+        destinationDisplayName
     }
 
     // MARK: - Configuration State (defaults optimized for streaming delivery)
@@ -32,6 +36,7 @@ final class StreamOptimizeViewModel {
         didSet { onEncoderChanged(from: oldValue) }
     }
     var quality: Int = 65
+    var svtAV1Preset: Int = 6
     var profile: StreamProfile = .main10
     var pixelFormat: StreamPixelFormat = .p010le
     var audioMode: StreamAudioMode = .copy
@@ -45,6 +50,7 @@ final class StreamOptimizeViewModel {
         StreamOptimizeConfiguration(
             encoder: encoder,
             quality: quality,
+            svtAV1Preset: svtAV1Preset,
             profile: profile,
             pixelFormat: pixelFormat,
             audioMode: audioMode,
@@ -68,6 +74,7 @@ final class StreamOptimizeViewModel {
         let d = StreamOptimizeConfiguration.default
         encoder = d.encoder
         quality = d.quality
+        svtAV1Preset = d.svtAV1Preset
         profile = d.profile
         pixelFormat = d.pixelFormat
         audioMode = d.audioMode
@@ -187,61 +194,14 @@ final class StreamOptimizeViewModel {
 
     // MARK: - Directory Management
 
-    func selectSourceDirectory() {
-        if let url = SecurityScopeManager.shared.presentOutputDirectoryPicker() {
-            sourceDirectoryURL = url
-            scanSourceDirectory()
-        }
-    }
-
-    func selectDestinationDirectory() {
+    func selectOutputDirectory() {
         if let url = SecurityScopeManager.shared.presentOutputDirectoryPicker() {
             destinationDirectoryURL = url
         }
     }
 
-    // MARK: - File Scanning
-
-    /// Scans the source directory for video files on a background thread.
-    /// FileManager enumeration is moved off MainActor to prevent UI blocking
-    /// on directories with many files or slow volumes.
-    func scanSourceDirectory() {
-        guard let sourceURL = sourceDirectoryURL else {
-            files = []
-            return
-        }
-
-        SecurityScopeManager.shared.startAccessing(sourceURL)
-
-        let supportedExts = Self.supportedExtensions
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let fm = FileManager.default
-            var scanned: [VideoFile] = []
-
-            do {
-                let contents = try fm.contentsOfDirectory(
-                    at: sourceURL,
-                    includingPropertiesForKeys: [.fileSizeKey],
-                    options: [.skipsHiddenFiles]
-                )
-
-                for url in contents {
-                    let ext = url.pathExtension.lowercased()
-                    guard supportedExts.contains(ext) else { continue }
-                    scanned.append(VideoFile(url: url))
-                }
-
-                // Sort by filename
-                scanned.sort { $0.fileName.localizedStandardCompare($1.fileName) == .orderedAscending }
-            } catch {
-                // Silently fail — files will be empty
-            }
-
-            await MainActor.run { [weak self] in
-                self?.files = scanned
-                self?.probeFiles()
-            }
-        }
+    func selectDestinationDirectory() {
+        selectOutputDirectory()
     }
 
     private func probeFiles() {
@@ -265,7 +225,8 @@ final class StreamOptimizeViewModel {
     // MARK: - Computed Properties
 
     var canStartProcessing: Bool {
-        batches.contains(where: { $0.state == .pending }) && !isQueueProcessing && destinationDirectoryURL != nil
+        !isQueueProcessing
+            && (batches.contains(where: { $0.state == .pending }) || !files.isEmpty)
     }
 
     var totalFileSize: String {
@@ -315,9 +276,14 @@ final class StreamOptimizeViewModel {
     /// Clears staging. A single file is a valid batch.
     func enqueueBatch() {
         guard QueueLogic.canEnqueue(fileCount: files.count) else { return }
-        guard let destURL = destinationDirectoryURL else { return }
+
+        if destinationDirectoryURL == nil {
+            selectOutputDirectory()
+            guard destinationDirectoryURL != nil else { return }
+        }
 
         let config = currentConfiguration
+        let destURL = destinationDirectoryURL
         let batchJobs = files.map { file in
             StreamOptimizeJob(file: file, configuration: config, destinationDirectory: destURL)
         }
@@ -331,8 +297,13 @@ final class StreamOptimizeViewModel {
         selectedBatchID = batch.id
     }
 
-    /// Start running the queue. Add-while-running works.
+    /// Start running the queue. Add-while-running works. If files are still staged
+    /// with no pending batch, enqueue them first so a manual "Add to Queue" isn't required.
     func startProcessing() {
+        if !files.isEmpty && !batches.contains(where: { $0.state == .pending }) {
+            enqueueBatch()
+            guard batches.contains(where: { $0.state == .pending }) else { return }
+        }
         executeQueue()
     }
 

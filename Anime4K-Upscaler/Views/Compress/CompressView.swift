@@ -17,6 +17,7 @@ struct CompressView: View {
                 onCancel: { viewModel.cancelBatch(id: $0) },
                 onDelete: { viewModel.deleteBatch(id: $0) },
                 onNewBatch: { viewModel.returnToConfiguration() },
+                onStartQueue: { viewModel.startProcessing() },
                 summary: { batch in
                     "\(batch.configuration.encoder.displayName) · \(batch.configuration.contentType.displayName)"
                 }
@@ -134,6 +135,15 @@ struct CompressView: View {
                 .disabled(!viewModel.canStartProcessing)
             }
         } else {
+            if viewModel.canStartProcessing {
+                Button {
+                    viewModel.startProcessing()
+                } label: {
+                    Label("Compress", systemImage: "play.fill")
+                }
+                .help("Start processing the queue")
+            }
+
             if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
@@ -405,6 +415,9 @@ private struct CompressConfigPanel: View {
             VStack(alignment: .leading, spacing: 16) {
                 selectedFileHeader
                 encoderSection
+                if viewModel.encoder == .svtAV1 {
+                    svtPresetSection
+                }
                 qualitySection
                 contentTypeSection
                 if viewModel.contentType == .anime {
@@ -499,6 +512,56 @@ private struct CompressConfigPanel: View {
                     .foregroundStyle(.secondary)
             }
             .padding(4)
+        }
+    }
+
+    // MARK: - SVT-AV1 Preset Section
+
+    @ViewBuilder
+    private var svtPresetSection: some View {
+        @Bindable var viewModel = viewModel
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("AV1 Speed Preset", systemImage: "gauge.with.dots.needle.67percent")
+                    .font(.headline)
+
+                HStack {
+                    Slider(
+                        value: Binding(
+                            get: { Double(viewModel.svtAV1Preset) },
+                            set: { viewModel.svtAV1Preset = Int($0) }
+                        ),
+                        in: 0...13,
+                        step: 1
+                    )
+
+                    Text("\(viewModel.svtAV1Preset)")
+                        .font(.body)
+                        .fontWeight(.semibold)
+                        .frame(width: 24, alignment: .trailing)
+                        .monospacedDigit()
+                }
+
+                Text(svtPresetDescription(viewModel.svtAV1Preset))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(4)
+        }
+    }
+
+    private func svtPresetDescription(_ preset: Int) -> String {
+        switch preset {
+        case 0...3:
+            return "Archival (Slowest, Maximum Compression)"
+        case 4...6:
+            return "Standard (Balanced Speed & Quality - Recommended)"
+        case 7...10:
+            return "Fast (High Speed, Moderate Compression)"
+        case 11...13:
+            return "Real-time (Ultra Fast, Lower Compression)"
+        default:
+            return ""
         }
     }
 
@@ -868,7 +931,16 @@ private struct CompressProcessingView: View {
                 }
             }
 
-            if viewModel.isQueueProcessing {
+            if viewModel.canStartProcessing && !viewModel.isQueueProcessing && !viewModel.allJobsFinished {
+                Button {
+                    viewModel.startProcessing()
+                } label: {
+                    Label("Start Compression", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.orange)
+                .controlSize(.small)
+            } else if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {

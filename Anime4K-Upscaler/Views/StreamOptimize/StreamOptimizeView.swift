@@ -16,6 +16,7 @@ struct StreamOptimizeView: View {
                 onCancel: { viewModel.cancelBatch(id: $0) },
                 onDelete: { viewModel.deleteBatch(id: $0) },
                 onNewBatch: { viewModel.returnToConfiguration() },
+                onStartQueue: { viewModel.startProcessing() },
                 summary: { batch in
                     "\(batch.configuration.encoder.displayName) · \(batch.configuration.profile.displayName)"
                 }
@@ -40,16 +41,20 @@ struct StreamOptimizeView: View {
     /// Staging detail: preset controls + staging file list + "Add to Queue".
     @ViewBuilder
     private var stagingView: some View {
-        VStack(spacing: 0) {
-            ScrollView {
-                VStack(spacing: 16) {
-                    StreamOptimizeConfigView()
-                    stagingFilesSection
+        if viewModel.files.isEmpty && viewModel.batches.isEmpty {
+            StreamOptimizeEmptyStateView()
+        } else {
+            VStack(spacing: 0) {
+                ScrollView {
+                    VStack(spacing: 16) {
+                        StreamOptimizeConfigView()
+                        stagingFilesSection
+                    }
+                    .padding(16)
                 }
-                .padding(16)
+                Divider()
+                addToQueueFooter
             }
-            Divider()
-            addToQueueFooter
         }
     }
 
@@ -128,6 +133,15 @@ struct StreamOptimizeView: View {
                 .help("Start processing the queue")
             }
         } else {
+            if viewModel.canStartProcessing {
+                Button {
+                    viewModel.startProcessing()
+                } label: {
+                    Label("Optimize", systemImage: "play.fill")
+                }
+                .help("Start processing the queue")
+            }
+
             if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
@@ -182,6 +196,11 @@ private struct StreamOptimizeConfigView: View {
                 // Encoding Settings
                 encoderSection
 
+                // SVT-AV1 Preset (when AV1 is chosen)
+                if viewModel.encoder == .svtAV1 {
+                    svtPresetSection
+                }
+
                 // Quality
                 qualitySection
 
@@ -197,11 +216,8 @@ private struct StreamOptimizeConfigView: View {
                 // Streaming & Keyframe
                 streamingSection
 
-                // Source Directory
-                sourceSection
-
-                // Destination Directory
-                destinationSection
+                // Output Directory
+                outputDirectorySection
 
                 // Start Button
                 startSection
@@ -239,6 +255,55 @@ private struct StreamOptimizeConfigView: View {
                 }
             }
             .padding(4)
+        }
+    }
+
+    // MARK: - SVT-AV1 Preset Section
+
+    private var svtPresetSection: some View {
+        @Bindable var vm = viewModel
+        return GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                Label("AV1 Speed Preset", systemImage: "gauge.with.dots.needle.67percent")
+                    .font(.headline)
+
+                HStack {
+                    Slider(
+                        value: Binding(
+                            get: { Double(viewModel.svtAV1Preset) },
+                            set: { viewModel.svtAV1Preset = Int($0) }
+                        ),
+                        in: 0...13,
+                        step: 1
+                    )
+
+                    Text("\(viewModel.svtAV1Preset)")
+                        .font(.body)
+                        .fontWeight(.semibold)
+                        .frame(width: 24, alignment: .trailing)
+                        .monospacedDigit()
+                }
+
+                Text(svtPresetDescription(viewModel.svtAV1Preset))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(4)
+        }
+    }
+
+    private func svtPresetDescription(_ preset: Int) -> String {
+        switch preset {
+        case 0...3:
+            return "Archival (Slowest, Maximum Compression)"
+        case 4...6:
+            return "Standard (Balanced Speed & Quality - Recommended)"
+        case 7...10:
+            return "Fast (High Speed, Moderate Compression)"
+        case 11...13:
+            return "Real-time (Ultra Fast, Lower Compression)"
+        default:
+            return ""
         }
     }
 
@@ -485,68 +550,12 @@ private struct StreamOptimizeConfigView: View {
         }
     }
 
-    // MARK: - Source Section
+    // MARK: - Output Directory Section
 
-    private var sourceSection: some View {
+    private var outputDirectorySection: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Source Directory", systemImage: "folder")
-                    .font(.headline)
-
-                HStack(spacing: 8) {
-                    if let url = viewModel.sourceDirectoryURL {
-                        Image(systemName: "folder.fill")
-                            .foregroundStyle(.teal)
-                        Text(url.path)
-                            .font(.callout)
-                            .lineLimit(1)
-                            .truncationMode(.head)
-                            .help(url.path)
-                        Spacer()
-
-                        Text("\(viewModel.files.count) videos")
-                            .font(.caption)
-                            .fontWeight(.medium)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.teal.opacity(0.12))
-                            .foregroundStyle(.teal)
-                            .clipShape(Capsule())
-
-                        Button("Change") {
-                            viewModel.selectSourceDirectory()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    } else {
-                        Image(systemName: "folder.badge.questionmark")
-                            .foregroundStyle(.secondary)
-                        Text("Select folder containing videos to optimize")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Choose…") {
-                            viewModel.selectSourceDirectory()
-                        }
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
-                    }
-                }
-
-                Text("Scans for .mkv, .mp4, .webm files in the selected folder.")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-            }
-            .padding(4)
-        }
-    }
-
-    // MARK: - Destination Section
-
-    private var destinationSection: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Destination Directory", systemImage: "folder.fill.badge.plus")
+                Label("Output Directory", systemImage: "folder.fill.badge.plus")
                     .font(.headline)
 
                 HStack(spacing: 8) {
@@ -560,19 +569,19 @@ private struct StreamOptimizeConfigView: View {
                             .help(url.path)
                         Spacer()
                         Button("Change") {
-                            viewModel.selectDestinationDirectory()
+                            viewModel.selectOutputDirectory()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
                     } else {
                         Image(systemName: "folder.badge.questionmark")
                             .foregroundStyle(.secondary)
-                        Text("Choose where optimized files will be saved")
+                        Text("Default (Same as input file)")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         Spacer()
                         Button("Choose…") {
-                            viewModel.selectDestinationDirectory()
+                            viewModel.selectOutputDirectory()
                         }
                         .buttonStyle(.bordered)
                         .controlSize(.small)
@@ -604,16 +613,17 @@ private struct StreamOptimizeConfigView: View {
                 .controlSize(.large)
                 .disabled(!viewModel.canStartProcessing)
 
-                if viewModel.files.isEmpty {
-                    Text("Select a source directory first")
+                if viewModel.files.isEmpty && viewModel.batches.isEmpty {
+                    Text("Add files to optimize")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
-                } else if viewModel.destinationDirectoryURL == nil {
-                    Text("Select a destination directory")
+                } else if !viewModel.files.isEmpty {
+                    Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") staged")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 } else {
-                    Text("\(viewModel.files.count) file\(viewModel.files.count == 1 ? "" : "s") ready")
+                    let pendingCount = viewModel.batches.filter { $0.state == .pending }.count
+                    Text("\(pendingCount) batch\(pendingCount == 1 ? "" : "es") queued")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
@@ -814,7 +824,16 @@ private struct StreamOptimizeProcessingView: View {
                 }
             }
 
-            if viewModel.isQueueProcessing {
+            if viewModel.canStartProcessing && !viewModel.isQueueProcessing && !viewModel.allJobsFinished {
+                Button {
+                    viewModel.startProcessing()
+                } label: {
+                    Label("Start Optimization", systemImage: "play.fill")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.teal)
+                .controlSize(.small)
+            } else if viewModel.isQueueProcessing {
                 Button {
                     viewModel.cancelAllQueued()
                 } label: {
@@ -970,26 +989,40 @@ private struct StreamOptimizeFileListView: View {
                     .background(.quaternary)
                     .clipShape(Capsule())
             }
+            Button {
+                viewModel.addFiles()
+            } label: {
+                Image(systemName: "plus")
+                    .font(.caption)
+            }
+            .buttonStyle(.plain)
+            .help("Add video files")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
     }
 
     private var placeholder: some View {
-        VStack(spacing: 12) {
-            Spacer()
-            Image(systemName: "arrow.down.doc")
-                .font(.system(size: 36))
-                .foregroundStyle(.tertiary)
-            Text("Drop Video Files Here")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-            Text("or click + to browse")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-            Spacer()
+        Button {
+            viewModel.addFiles()
+        } label: {
+            VStack(spacing: 12) {
+                Spacer()
+                Image(systemName: "arrow.down.doc")
+                    .font(.system(size: 36))
+                    .foregroundStyle(.tertiary)
+                Text("Drop Video Files Here")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                Text("or click to browse")
+                    .font(.caption)
+                    .foregroundStyle(.tertiary)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .contentShape(Rectangle())
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .buttonStyle(.plain)
         .background {
             if isDropTargeted {
                 RoundedRectangle(cornerRadius: 8)
@@ -1115,5 +1148,94 @@ private struct StreamOptimizeFileRow: View {
             Spacer()
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Empty State View
+
+private struct StreamOptimizeEmptyStateView: View {
+    @Environment(StreamOptimizeViewModel.self) private var viewModel
+    @State private var isTargeted: Bool = false
+
+    var body: some View {
+        VStack(spacing: 24) {
+            Spacer()
+
+            VStack(spacing: 12) {
+                Image(systemName: "bolt.badge.film")
+                    .font(.system(size: 56))
+                    .foregroundStyle(.teal)
+
+                Text("Stream Optimize")
+                    .font(.title)
+                    .fontWeight(.bold)
+
+                Text("Transcode and optimize videos for ultra-fast streaming playback, frame-accurate seeking, and wide device compatibility.")
+                    .font(.body)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 460)
+            }
+
+            Button {
+                viewModel.addFiles()
+            } label: {
+                Label("Add Video Files", systemImage: "plus.circle.fill")
+                    .font(.headline)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 4)
+            }
+            .buttonStyle(.borderedProminent)
+            .tint(.teal)
+            .controlSize(.large)
+
+            VStack(alignment: .leading, spacing: 8) {
+                featureBullet(icon: "bolt.horizontal.fill", text: "Faststart (moov atom) at file beginning for instant playback")
+                featureBullet(icon: "timer", text: "Enforced 2s keyframe intervals for seamless scrubbing")
+                featureBullet(icon: "apple.logo", text: "Hardware-accelerated Apple Silicon HEVC VideoToolbox")
+            }
+            .padding(.top, 8)
+
+            Spacer()
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .padding(40)
+        .background {
+            if isTargeted {
+                RoundedRectangle(cornerRadius: 12)
+                    .strokeBorder(.teal.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                    .padding(16)
+            }
+        }
+        .onDrop(of: [.fileURL], isTargeted: $isTargeted) { providers in
+            handleDrop(providers)
+        }
+    }
+
+    private func featureBullet(icon: String, text: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.caption)
+                .foregroundStyle(.teal)
+                .frame(width: 16)
+            Text(text)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
+        var didAdd = false
+        for provider in providers {
+            if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier) {
+                provider.loadItem(forTypeIdentifier: UTType.fileURL.identifier, options: nil) { data, _ in
+                    guard let data = data as? Data,
+                          let url = URL(dataRepresentation: data, relativeTo: nil, isAbsolute: true) else { return }
+                    Task { @MainActor in viewModel.addFilesFromDrop([url]) }
+                }
+                didAdd = true
+            }
+        }
+        return didAdd
     }
 }
