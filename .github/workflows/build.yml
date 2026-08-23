@@ -1,14 +1,12 @@
-name: Build and Release
-run-name: Release ${{ github.event.release.tag_name || github.ref_name }}
+name: Build
 on:
-  release:
-    types: [created]
   push:
+    branches: [ main ]
     tags:
       - 'v*'
-
-permissions:
-  contents: write
+  pull_request:
+    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -71,29 +69,20 @@ jobs:
         fi
         echo "✅ Dependency versions verified: libplacebo=$LP_VER, molten-vk=$MVK_VER"
 
-    - name: Resolve release tag and version
+    - name: Resolve build version
       id: get_version
       run: |
-        TAG_FROM_RELEASE="${{ github.event.release.tag_name || '' }}"
-        TAG_FROM_REF="${{ github.ref_name }}"
-
-        if [[ -n "$TAG_FROM_RELEASE" ]]; then
-          RAW_TAG="$TAG_FROM_RELEASE"
-          if [[ -n "$TAG_FROM_REF" && "$TAG_FROM_REF" != "$TAG_FROM_RELEASE" ]]; then
-            echo "error: ref tag ($TAG_FROM_REF) does not match release tag ($TAG_FROM_RELEASE)"
-            exit 1
-          fi
+        RAW_REF="${{ github.ref_name }}"
+        if [[ "$RAW_REF" == v* ]]; then
+          VERSION="${RAW_REF#v}"
+          RAW_TAG="$RAW_REF"
         else
-          RAW_TAG="$TAG_FROM_REF"
-        fi
-
-        if [[ -z "$RAW_TAG" ]]; then
-          echo "error: unable to resolve release tag"
-          exit 1
+          VERSION="2.0.0"
+          RAW_TAG="v2.0.0-${GITHUB_SHA:0:7}"
         fi
 
         echo "RAW_TAG=$RAW_TAG" >> "$GITHUB_ENV"
-        echo "VERSION=${RAW_TAG#v}" >> "$GITHUB_ENV"
+        echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
     - name: Update version number
       run: |
@@ -248,15 +237,9 @@ jobs:
 
         echo "DMG_PATH=$DMG_PATH" >> "$GITHUB_ENV"
 
-    - name: Upload Release Asset
-      uses: softprops/action-gh-release@v2
+    - name: Upload Build Artifact
+      uses: actions/upload-artifact@v4
       with:
-        tag_name: ${{ env.RAW_TAG }}
-        name: Anime4K Upscaler ${{ env.RAW_TAG }}
-        files: ${{ env.DMG_PATH }}
-        overwrite_files: true
-        append_body: true
-        body: >-
-          This release is not Developer ID signed and not notarized. On first launch, macOS Gatekeeper may block it; allow it from System Settings > Privacy and Security by clicking Open Anyway, or use Finder right-click Open once.
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        name: Anime4K-Upscaler-arm64-DMG
+        path: ${{ env.DMG_PATH }}
+        if-no-files-found: error
