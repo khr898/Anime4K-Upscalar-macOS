@@ -270,7 +270,7 @@ private struct CompressFileListView: View {
                 .background {
                     if isDropTargeted {
                         RoundedRectangle(cornerRadius: 8)
-                            .strokeBorder(.blue.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                            .strokeBorder(.orange.opacity(0.6), style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .padding(8)
                     }
                 }
@@ -293,8 +293,8 @@ private struct CompressFileListView: View {
                 .overlay {
                     if isDropTargeted {
                         RoundedRectangle(cornerRadius: 8)
-                            .fill(.blue.opacity(0.08))
-                            .strokeBorder(.blue.opacity(0.4), style: StrokeStyle(lineWidth: 2, dash: [8]))
+                            .fill(.orange.opacity(0.08))
+                            .strokeBorder(.orange.opacity(0.4), style: StrokeStyle(lineWidth: 2, dash: [8]))
                             .padding(4)
                     }
                 }

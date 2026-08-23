@@ -971,7 +971,22 @@ struct FFmpegArgumentBuilder {
         args.append(contentsOf: ["-c:a", "copy"])
         args.append(contentsOf: ["-c:s", "copy"])
 
-        // Codec-specific encoding parameters
+        // Codec-specific encoding and compression parameters
+        args.append(contentsOf: compressionArguments(for: configuration))
+
+        // Progress output for parsing
+        args.append(contentsOf: ["-progress", "pipe:1"])
+
+        // Output file
+        args.append(outputURL.path)
+
+        return args
+    }
+
+    /// Builds codec, quality/CRF/bitrate, and GOP parameters for FFmpeg encoders.
+    static func compressionArguments(for configuration: JobConfiguration) -> [String] {
+        var args: [String] = []
+
         switch configuration.codec {
         case .hevcVideoToolbox:
             args.append(contentsOf: [
@@ -1024,12 +1039,6 @@ struct FFmpegArgumentBuilder {
         if configuration.longGOPEnabled {
             args.append(contentsOf: ["-g", "240"])
         }
-
-        // Progress output for parsing
-        args.append(contentsOf: ["-progress", "pipe:1"])
-
-        // Output file
-        args.append(outputURL.path)
 
         return args
     }

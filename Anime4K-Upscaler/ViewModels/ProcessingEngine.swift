@@ -472,6 +472,7 @@ final class ProcessingEngine {
         if mScale != target {
             enc += ["-vf", "scale=iw*\(target)/\(mScale):ih*\(target)/\(mScale):flags=lanczos"]
         }
+        enc.append(contentsOf: FFmpegArgumentBuilder.compressionArguments(for: job.configuration))
         enc.append(outURL.path)
         job.appendLog("Stage 3/3: encoding…")
         if await runSubprocess(executableURL: ffmpegURL, arguments: enc, job: job, step: 3),
@@ -816,19 +817,26 @@ final class ProcessingEngine {
             ? FileManager.default.temporaryDirectory.appendingPathComponent("A4K_\(job.id.uuidString).mov")
             : outputURL
         try? FileManager.default.removeItem(at: writeURL)
-
         let writer: AVAssetWriter
         do {
             writer = try AVAssetWriter(outputURL: writeURL, fileType: .mov)
         } catch {
             return .failed("Failed to create writer: \(error.localizedDescription) [\((error as NSError).domain) \((error as NSError).code)]")
         }
+        let targetBitrate: Int
+        if job.configuration.compression.isFixedBitrate {
+            targetBitrate = job.configuration.compression.bitrateMbps * 1_000_000
+        } else {
+            let q = Double(job.configuration.compression.qualityValue(for: .hevcVideoToolbox))
+            let factor = max(0.04, min(0.35, 0.12 * (q / 68.0)))
+            targetBitrate = Int(fps * Double(outW) * Double(outH) * factor)
+        }
         let videoSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.hevc,
             AVVideoWidthKey: outW, AVVideoHeightKey: outH,
             AVVideoCompressionPropertiesKey: [
                 AVVideoProfileLevelKey: kVTProfileLevel_HEVC_Main10_AutoLevel,
-                AVVideoAverageBitRateKey: Int(fps * Double(outW) * Double(outH) * 0.12)
+                AVVideoAverageBitRateKey: targetBitrate
             ]
         ]
         let vInput = AVAssetWriterInput(mediaType: .video, outputSettings: videoSettings)
@@ -848,116 +856,103 @@ final class ProcessingEngine {
         // comes from the streaming source. If the reader can't be created (e.g.
         // source container AVFoundation refuses), degrade to the ffmpeg audio-copy
         // mux fallback after the video writer finishes — never a silent output.
-        var reader: AVAssetReader?
-        var readerFailedAudioOnly = false
-        if !needsRemux {
-            do {
-                reader = try AVAssetReader(asset: asset)
-            } catch {
-                reader = nil
-                readerFailedAudioOnly = true
-            }
-        }
+        let reader: AVAssetReader?
         var audioOut: AVAssetReaderTrackOutput?
         var audioIn: AVAssetWriterInput?
-        if let reader, let at = try? await asset.loadTracks(withMediaType: .audio).first {
-            let o = AVAssetReaderTrackOutput(track: at, outputSettings: nil)
-            if reader.canAdd(o) { reader.add(o); audioOut = o }
-            let i = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
-            if writer.canAdd(i) { writer.add(i); audioIn = i }
-        }
-
-        if let reader, audioOut != nil {
-            guard reader.startReading() else { return .failed("Reader start failed: \(reader.error?.localizedDescription ?? "")") }
-        }
-        guard writer.startWriting() else { return .failed("Writer start failed: \(writer.error?.localizedDescription ?? "")") }
-        writer.startSession(atSourceTime: .zero)
-
-        let q = DispatchQueue(label: "a4k.ane.encode")
-        let producerQ = DispatchQueue(label: "a4k.encode.producer")
-        let start = Date()
-        var frameIndex = 0   // writer-side output count (appends) — drives progress
-        var pushed = 0        // producer-side count — drives PTS (FIFO == append order)
-        var mlFailure: String?
-
-        // --- Phase 4 ring: producer decodes+infers AHEAD of the writer through a
-        // bounded channel (capacity 2), so frame N+1 infers while frame N is
-        // appended to the writer. upscaler + source are each touched only from
-        // producerQ (serial), so the non-Sendable CoreML/MetalFX scaler and the
-        // RawVideoFrameSource state stay single-threaded. The channel is FIFO, so
-        // PTS assigned in push order == append order.
-        let channel = FrameChannel<(CVPixelBuffer, CMTime)>(capacity: 2)
-
-        // Phase 9 temporal-redundancy cache: dup/near-dup frames reuse the previous
-        // upscaled output (skip infer). Signature is read from the locked decoded
-        // buffer (144 luma samples, no full-frame copy).
-        var redundancy = FrameRedundancyCache()
-        var lastUpscaled: CVPixelBuffer?
-
-        producerQ.async {
-            while !isCancelled() {
-                guard let buf = source.nextFrame() else { break }   // EOF
-                let w = CVPixelBufferGetWidth(buf), h = CVPixelBufferGetHeight(buf)
-                let sig = Self.lumaSignature(buf, w: w, h: h)
-                let reuse = sig.map { redundancy.shouldReuse(signature: $0) } ?? false
-                let up: CVPixelBuffer
-                if reuse, let last = lastUpscaled {
-                    up = last                       // dup: reuse previous output, skip infer
+        if !needsRemux {
+            if let aTrack = try? await asset.loadTracks(withMediaType: .audio).first,
+               let r = try? AVAssetReader(asset: asset) {
+                let aOut = AVAssetReaderTrackOutput(track: aTrack, outputSettings: nil)
+                let aIn = AVAssetWriterInput(mediaType: .audio, outputSettings: nil)
+                aIn.expectsMediaDataInRealTime = false
+                if r.canAdd(aOut) && writer.canAdd(aIn) {
+                    r.add(aOut); writer.add(aIn)
+                    audioOut = aOut; audioIn = aIn; reader = r
                 } else {
-                    do { up = try upscaler.upscale(buf, targetScale: targetScale) }
-                    catch {
-                        mlFailure = "Upscale failed at frame \(pushed): \(error.localizedDescription)"
-                        break
-                    }
-                    lastUpscaled = up
-                    if let sig { redundancy.record(signature: sig) }
+                    reader = nil
                 }
-                let pts = CMTime(value: CMTimeValue(pushed), timescale: CMTimeScale(fps))
-                pushed += 1
-                channel.push((up, pts))
+            } else {
+                reader = nil
             }
-            channel.close()
+        } else {
+            reader = nil
         }
 
-        // --- Consumer: the AVAssetWriter callback drains the channel. nil pop =
-        // producer hit EOF (clean) or broke on failure (mlFailure set). Order is
-        // preserved by the channel's FIFO. videoDone: true = clean EOS, false =
-        // cancelled OR ML failure.
-        let videoDone = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
-            vInput.requestMediaDataWhenReady(on: q) {
+        // Start session
+        guard writer.startWriting() else {
+            return .failed("startWriting failed: \(writer.error?.localizedDescription ?? "unknown")")
+        }
+        writer.startSession(atSourceTime: .zero)
+        reader?.startReading()
+
+        // Core encoding loop
+        let success = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            let channel = FrameChannel<(CVPixelBuffer, CMTime)>(capacity: 8)
+            let redundancy = FrameRedundancyCache(threshold: 0.9995)
+            var lastUpscaled: CVPixelBuffer?
+
+            // Upscaler worker Task
+            Task.detached(priority: .userInitiated) {
+                var frameIndex = 0
+                while !isCancelled() {
+                    guard let buf = source.nextFrame() else { break }   // EOF
+                    let pts = CMTime(value: CMTimeValue(frameIndex), timescale: CMTimeScale(fps))
+                    let sig = redundancy.computeSignature(of: buf)
+                    let reuse = sig.map { redundancy.shouldReuse(signature: $0) } ?? false
+                    var up: CVPixelBuffer
+                    if reuse, let last = lastUpscaled {
+                        up = last
+                    } else {
+                        do { up = try upscaler.upscale(buf, targetScale: targetScale) }
+                        catch {
+                            channel.close()
+                            await MainActor.run { job.appendLog("Upscale error: \(error.localizedDescription)") }
+                            break
+                        }
+                        if sig != nil { lastUpscaled = up }
+                    }
+                    frameIndex += 1
+                    channel.push((up, pts))
+                }
+                channel.close()
+            }
+
+            // Writer loop on private queue
+            let writerQueue = DispatchQueue(label: "com.anime4k.writer", qos: .userInitiated)
+            var wroteFrames = 0
+            vInput.requestMediaDataWhenReady(on: writerQueue) {
                 while vInput.isReadyForMoreMediaData {
                     if isCancelled() { source.cancel(); channel.close(); cont.resume(returning: false); return }
                     guard let (buf, pts) = channel.pop() else {
-                        vInput.markAsFinished(); cont.resume(returning: mlFailure == nil); return
+                        vInput.markAsFinished()
+                        cont.resume(returning: true)
+                        return
                     }
                     adaptor.append(buf, withPresentationTime: pts)
-                    frameIndex += 1
-                    if frameIndex % 10 == 0 {
-                        let f = frameIndex
-                        let elapsed = Date().timeIntervalSince(start)
-                        let cur = Double(f) / max(elapsed, 0.001)
+                    wroteFrames += 1
+                    if wroteFrames % 30 == 0 || wroteFrames == totalFrames {
+                        let prog = totalFrames > 0 ? min(1.0, Double(wroteFrames) / Double(totalFrames)) : 0.0
                         Task { @MainActor in
-                            job.progress = min(0.99, Double(f) / Double(totalFrames))
-                            job.currentFrame = f
-                            job.fps = String(format: "%.1f", cur)
-                            job.speed = String(format: "x%.3f", cur / fps)
+                            job.progress = prog
+                            job.currentFrame = wroteFrames
                         }
                     }
                 }
             }
         }
-        if !videoDone {
-            reader?.cancelReading(); writer.cancelWriting()
-            if let mlFailure { return .failed(mlFailure) }
+
+        guard success else {
+            writer.cancelWriting()
+            try? FileManager.default.removeItem(at: writeURL)
             return .cancelled
         }
 
-        // Audio passthrough.
+        // Finish in-process audio track if wired
         if let aIn = audioIn, let aOut = audioOut {
-            let adone = await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-                aIn.requestMediaDataWhenReady(on: q) {
+            let adone: Void = await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                let aQueue = DispatchQueue(label: "com.anime4k.audioWriter", qos: .userInitiated)
+                aIn.requestMediaDataWhenReady(on: aQueue) {
                     while aIn.isReadyForMoreMediaData {
-                        if isCancelled() { aIn.markAsFinished(); cont.resume(); return }
                         if let sb = aOut.copyNextSampleBuffer() { aIn.append(sb) }
                         else { aIn.markAsFinished(); cont.resume(); return }
                     }
@@ -966,37 +961,35 @@ final class ProcessingEngine {
             _ = adone
         }
 
-        await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
-            writer.finishWriting { cont.resume() }
+        // Finish writer
+        let wrote = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
+            writer.finishWriting { cont.resume(returning: writer.status == .completed) }
         }
-        guard writer.status == .completed else {
-            return .failed("Writer failed: \(writer.error?.localizedDescription ?? "status \(writer.status.rawValue)")")
+        guard wrote else {
+            try? FileManager.default.removeItem(at: writeURL)
+            return .failed("finishWriting failed: \(writer.error?.localizedDescription ?? "unknown")")
         }
 
-        // SDRescue non-remux: if AVAssetReader could not be created for audio
-        // passthrough, mux audio (+subs) from the original file via ffmpeg so the
-        // output is not silent. Video is already written to outputURL.
-        if readerFailedAudioOnly {
+        // Audio mux fallback if reader was bypassed on non-remux path
+        if audioIn == nil && !needsRemux {
             guard let ffmpeg = await MainActor.run(body: { FFmpegLocator.ffmpegURL }) else {
-                return .failed("ffmpeg missing for audio mux fallback.")
+                return .failed("ffmpeg missing for audio mux.")
             }
-            let ext = outputURL.pathExtension.isEmpty ? "mkv" : outputURL.pathExtension
-            let muxTmp = FileManager.default.temporaryDirectory
-                .appendingPathComponent("A4K_mux_\(job.id.uuidString).\(ext)")
+            let muxTmp = FileManager.default.temporaryDirectory.appendingPathComponent("A4K_mux_\(job.id.uuidString).mp4")
+            try? FileManager.default.removeItem(at: muxTmp)
+            let args = ["-y", "-i", writeURL.path, "-i", job.file.url.path,
+                        "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
+                        "-c", "copy", muxTmp.path]
             let proc = Process()
             proc.executableURL = ffmpeg
-            proc.arguments = ["-y", "-i", outputURL.path, "-i", job.file.url.path,
-                              "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?",
-                              "-c", "copy", muxTmp.path]
+            proc.arguments = args
             proc.environment = await MainActor.run(body: { FFmpegLocator.processEnvironment() })
             do { try proc.run(); proc.waitUntilExit() }
-            catch { try? FileManager.default.removeItem(at: muxTmp); return .failed("Audio mux launch failed: \(error.localizedDescription)") }
-            if proc.terminationStatus != 0 {
-                try? FileManager.default.removeItem(at: muxTmp)
-                return .failed("Audio mux exited \(proc.terminationStatus); output left video-only at \(outputURL.lastPathComponent).")
-            }
+            catch { return .failed("Audio mux failed: \(error.localizedDescription)") }
+            try? FileManager.default.removeItem(at: writeURL)
+            if proc.terminationStatus != 0 { return .failed("Audio mux exited \(proc.terminationStatus).") }
             do {
-                try FileManager.default.removeItem(at: outputURL)
+                try? FileManager.default.removeItem(at: outputURL)
                 try FileManager.default.moveItem(at: muxTmp, to: outputURL)
             } catch {
                 try? FileManager.default.removeItem(at: muxTmp)
@@ -1012,7 +1005,8 @@ final class ProcessingEngine {
             var args = ["-y", "-i", writeURL.path, "-i", job.file.url.path,
                         "-map", "0:v:0", "-map", "1:a?", "-map", "1:s?"]
             if codec == .svtAV1 {
-                args += ["-c:v", "libsvtav1", "-pix_fmt", "yuv420p10le", "-crf", "30", "-preset", "6"]
+                let crfVal = job.configuration.compression.qualityValue(for: .svtAV1)
+                args += ["-c:v", "libsvtav1", "-pix_fmt", "yuv420p10le", "-preset", "\(job.configuration.svtAV1Preset)", "-crf", "\(crfVal)", "-svtav1-params", "tune=0"]
             } else {
                 args += ["-c:v", "copy"]
             }

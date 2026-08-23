@@ -169,29 +169,9 @@ private struct StreamOptimizeConfigView: View {
     var body: some View {
         @Bindable var vm = viewModel
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                // Title
-                VStack(alignment: .leading, spacing: 4) {
-                    HStack {
-                        Label("Stream Optimize", systemImage: "bolt.badge.film")
-                            .font(.title2)
-                            .fontWeight(.semibold)
-                        Spacer()
-                        Button {
-                            viewModel.resetToDefaults()
-                        } label: {
-                            Label("Reset Defaults", systemImage: "arrow.counterclockwise")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.plain)
-                        .foregroundStyle(.secondary)
-                        .help("Reset all settings to streaming-optimized defaults")
-                    }
-
-                    Text("Transcode videos for streaming delivery — optimized for quick seeking and broad compatibility")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                }
+            VStack(alignment: .leading, spacing: 16) {
+                // Selected File Header & Staging count
+                selectedFileHeader
 
                 // Encoding Settings
                 encoderSection
@@ -222,10 +202,77 @@ private struct StreamOptimizeConfigView: View {
                 // Start Button
                 startSection
             }
-            .padding(24)
+            .padding(20)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
+    }
+
+    // MARK: - Selected File Header
+
+    @ViewBuilder
+    private var selectedFileHeader: some View {
+        if let file = viewModel.selectedFile {
+            GroupBox {
+                HStack(spacing: 10) {
+                    Image(systemName: "film")
+                        .font(.title2)
+                        .foregroundStyle(.teal)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(file.fileName)
+                            .font(.headline)
+                            .lineLimit(1)
+
+                        HStack(spacing: 6) {
+                            Text(file.fileExtension.uppercased())
+                                .font(.caption2)
+                                .fontWeight(.bold)
+                                .padding(.horizontal, 4)
+                                .padding(.vertical, 1)
+                                .background(.teal.opacity(0.12))
+                                .foregroundStyle(.teal)
+                                .clipShape(RoundedRectangle(cornerRadius: 3))
+
+                            Text(file.formattedFileSize)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+
+                            if let res = file.resolutionString {
+                                Text("•")
+                                    .foregroundStyle(.quaternary)
+                                Text(res)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+
+                            if let dur = file.formattedDuration {
+                                Text("•")
+                                    .foregroundStyle(.quaternary)
+                                Text(dur)
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+
+                    Spacer()
+                }
+                .padding(2)
+            }
+        }
+
+        if viewModel.files.count > 1 {
+            HStack {
+                Image(systemName: "square.stack.3d.up")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Text("\(viewModel.files.count) files staged for batch")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 4)
+        }
     }
 
     // MARK: - Encoder Section
@@ -318,8 +365,9 @@ private struct StreamOptimizeConfigView: View {
                         .font(.headline)
                     Spacer()
                     Text("\(viewModel.quality)")
-                        .font(.system(.title3, design: .monospaced, weight: .semibold))
-                        .foregroundStyle(.teal)
+                        .font(.caption)
+                        .fontWeight(.semibold)
+                        .monospacedDigit()
                 }
 
                 Slider(
@@ -329,21 +377,15 @@ private struct StreamOptimizeConfigView: View {
                     ),
                     in: 0...Double(viewModel.encoder.maxQuality),
                     step: 1
-                ) {
-                    EmptyView()
-                } minimumValueLabel: {
-                    Text("0").font(.caption2).foregroundStyle(.tertiary)
-                } maximumValueLabel: {
-                    Text("\(viewModel.encoder.maxQuality)").font(.caption2).foregroundStyle(.tertiary)
-                }
+                )
 
                 if viewModel.encoder.usesCRF {
-                    Text("Lower CRF = higher quality, larger file. 28 is a good balance for streaming.")
-                        .font(.caption)
+                    Text("Lower CRF = higher quality, larger file. 28 is recommended for streaming.")
+                        .font(.caption2)
                         .foregroundStyle(.tertiary)
                 } else {
                     Text("Higher value = better quality, larger file. 65 is recommended for streaming.")
-                        .font(.caption)
+                        .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
             }
@@ -391,7 +433,7 @@ private struct StreamOptimizeConfigView: View {
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle")
                         .font(.caption2)
-                        .foregroundStyle(.teal)
+                        .foregroundStyle(.secondary)
                     Text(viewModel.profile.subtitle)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -406,30 +448,20 @@ private struct StreamOptimizeConfigView: View {
     private var audioSection: some View {
         @Bindable var vm = viewModel
         return GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 Label("Audio", systemImage: "speaker.wave.2")
                     .font(.headline)
 
                 Picker("Audio Mode", selection: $vm.audioMode) {
                     ForEach(StreamAudioMode.allCases) { mode in
-                        HStack {
-                            Image(systemName: mode.symbolName)
-                            Text(mode.displayName)
-                        }
-                        .tag(mode)
+                        Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.radioGroup)
+                .pickerStyle(.menu)
 
-                HStack(spacing: 6) {
-                    Image(systemName: viewModel.audioMode.symbolName)
-                        .font(.caption)
-                        .foregroundStyle(.teal)
-                    Text(viewModel.audioMode.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(viewModel.audioMode.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(4)
         }
@@ -440,30 +472,20 @@ private struct StreamOptimizeConfigView: View {
     private var subtitleSection: some View {
         @Bindable var vm = viewModel
         return GroupBox {
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
                 Label("Subtitles", systemImage: "text.bubble")
                     .font(.headline)
 
                 Picker("Subtitle Mode", selection: $vm.subtitleMode) {
                     ForEach(StreamSubtitleMode.allCases) { mode in
-                        HStack {
-                            Image(systemName: mode.symbolName)
-                            Text(mode.displayName)
-                        }
-                        .tag(mode)
+                        Label(mode.displayName, systemImage: mode.symbolName).tag(mode)
                     }
                 }
-                .labelsHidden()
-                .pickerStyle(.radioGroup)
+                .pickerStyle(.menu)
 
-                HStack(spacing: 6) {
-                    Image(systemName: viewModel.subtitleMode.symbolName)
-                        .font(.caption)
-                        .foregroundStyle(.teal)
-                    Text(viewModel.subtitleMode.subtitle)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
+                Text(viewModel.subtitleMode.subtitle)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(4)
         }
@@ -989,14 +1011,6 @@ private struct StreamOptimizeFileListView: View {
                     .background(.quaternary)
                     .clipShape(Capsule())
             }
-            Button {
-                viewModel.addFiles()
-            } label: {
-                Image(systemName: "plus")
-                    .font(.caption)
-            }
-            .buttonStyle(.plain)
-            .help("Add video files")
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -1181,9 +1195,6 @@ private struct StreamOptimizeEmptyStateView: View {
                 viewModel.addFiles()
             } label: {
                 Label("Add Video Files", systemImage: "plus.circle.fill")
-                    .font(.headline)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 4)
             }
             .buttonStyle(.borderedProminent)
             .tint(.teal)
@@ -1199,7 +1210,7 @@ private struct StreamOptimizeEmptyStateView: View {
             Spacer()
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
+        .padding(32)
         .background {
             if isTargeted {
                 RoundedRectangle(cornerRadius: 12)

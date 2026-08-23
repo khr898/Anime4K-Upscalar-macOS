@@ -224,11 +224,12 @@ struct ConfigurationPanel: View {
                     viewModel.syncCompression()
                 }
 
-                // Custom Quality Slider
-                if viewModel.compressionPreset == .customQuality {
+                // Direct Quality / CRF Slider
+                if viewModel.compressionPreset != .fixedBitrate {
                     let isAV1 = viewModel.configuration.codec.usesCRF
                     let maxVal = isAV1 ? 63 : 100
-                    let labelText = isAV1 ? "CRF" : "Quality"
+                    let labelText = isAV1 ? "CRF (0–63)" : "Quality (0–100)"
+                    let currentVal = viewModel.configuration.compression.qualityValue(for: viewModel.configuration.codec)
 
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
@@ -236,7 +237,7 @@ struct ConfigurationPanel: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Spacer()
-                            Text("\(viewModel.customQualityValue)")
+                            Text("\(currentVal)")
                                 .font(.caption)
                                 .fontWeight(.semibold)
                                 .monospacedDigit()
@@ -244,12 +245,19 @@ struct ConfigurationPanel: View {
 
                         Slider(
                             value: Binding(
-                                get: { Double(viewModel.customQualityValue) },
-                                set: { viewModel.updateCustomQuality(Int($0)) }
+                                get: { Double(currentVal) },
+                                set: {
+                                    viewModel.compressionPreset = .customQuality
+                                    viewModel.updateCustomQuality(Int($0))
+                                }
                             ),
                             in: 0...Double(maxVal),
                             step: 1
                         )
+
+                        Text(isAV1 ? "Default visually lossless: 24 (Lower = higher quality)" : "Default visually lossless: 68 (Higher = higher quality)")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
                     }
                 }
 
