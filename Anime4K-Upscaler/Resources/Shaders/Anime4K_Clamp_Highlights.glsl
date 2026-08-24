@@ -71,7 +71,7 @@ vec4 hook() {
 }
 
 //!DESC Anime4K-v4.0-De-Ring-Clamp
-//!HOOK MAIN
+//!HOOK PREKERNEL
 //!BIND HOOKED
 //!BIND STATSMAX
 

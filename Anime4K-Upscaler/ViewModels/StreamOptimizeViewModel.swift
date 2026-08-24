@@ -44,6 +44,7 @@ final class StreamOptimizeViewModel {
     var keyframeInterval: KeyframeInterval = .twoSeconds
     var faststart: Bool = true
     var allowSWFallback: Bool = true
+    var prioritizeSpeed: Bool = false
 
     /// Builds a `StreamOptimizeConfiguration` snapshot from the current UI state.
     var currentConfiguration: StreamOptimizeConfiguration {
@@ -57,7 +58,8 @@ final class StreamOptimizeViewModel {
             subtitleMode: subtitleMode,
             keyframeInterval: keyframeInterval,
             faststart: faststart,
-            allowSWFallback: allowSWFallback
+            allowSWFallback: allowSWFallback,
+            prioritizeSpeed: prioritizeSpeed
         )
     }
 

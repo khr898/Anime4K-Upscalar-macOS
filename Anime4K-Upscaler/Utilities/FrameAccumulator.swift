@@ -61,6 +61,19 @@ struct FrameAccumulator {
         return frame
     }
 
+    /// Copy the next complete frame's bytes directly into destination memory without intermediate Data allocation.
+    mutating func copyFrame(frameSize: Int, to destination: UnsafeMutableRawPointer) -> Bool {
+        guard frameSize > 0, readOffset + frameSize <= buffer.count else { return false }
+        let start = buffer.startIndex + readOffset
+        buffer.withUnsafeBytes { raw in
+            if let base = raw.baseAddress {
+                memcpy(destination, base.advanced(by: start), frameSize)
+            }
+        }
+        readOffset += frameSize
+        return true
+    }
+
     /// Leftover bytes not yet forming a complete frame (inspect at EOF).
     var remaining: Data {
         buffer.count > readOffset

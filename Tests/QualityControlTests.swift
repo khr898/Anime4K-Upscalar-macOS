@@ -6,12 +6,12 @@ import Foundation
 // MARK: - Quality & Encoding Argument Spec
 
 struct QualityArgSpec {
-    static func buildUpscaleCompressionArgs(codec: String, usesCRF: Bool, qualityVal: Int, isBitrate: Bool, bitrateMbps: Int, svtPreset: Int, longGOP: Bool) -> [String] {
+    static func buildUpscaleCompressionArgs(codec: String, usesCRF: Bool, qualityVal: Int, isBitrate: Bool, bitrateMbps: Int, svtPreset: Int, longGOP: Bool, prioritizeSpeed: Bool = false) -> [String] {
         var args: [String] = []
         if codec == "hevc_videotoolbox" {
             args.append(contentsOf: [
                 "-profile:v", "main10",
-                "-prio_speed", "1",
+                "-prio_speed", prioritizeSpeed ? "1" : "0",
                 "-allow_sw", "1",
                 "-bf", "7"
             ])
@@ -85,15 +85,23 @@ struct QualityControlTests {
             }
         }
 
-        // Test 1: HEVC Visually Lossless default
+        // Test 1: HEVC Visually Lossless default (prioritizeSpeed = false -> -prio_speed 0)
         let hevcDefaultArgs = QualityArgSpec.buildUpscaleCompressionArgs(
             codec: "hevc_videotoolbox", usesCRF: false, qualityVal: 68,
-            isBitrate: false, bitrateMbps: 0, svtPreset: 6, longGOP: true
+            isBitrate: false, bitrateMbps: 0, svtPreset: 6, longGOP: true, prioritizeSpeed: false
         )
         check("HEVC default has -q:v 68", hevcDefaultArgs.contains("-q:v") && hevcDefaultArgs[hevcDefaultArgs.firstIndex(of: "-q:v")! + 1] == "68")
         check("HEVC default has -profile:v main10", hevcDefaultArgs.contains("-profile:v") && hevcDefaultArgs[hevcDefaultArgs.firstIndex(of: "-profile:v")! + 1] == "main10")
+        check("HEVC default has -prio_speed 0", hevcDefaultArgs.contains("-prio_speed") && hevcDefaultArgs[hevcDefaultArgs.firstIndex(of: "-prio_speed")! + 1] == "0")
         check("HEVC default has -bf 7", hevcDefaultArgs.contains("-bf") && hevcDefaultArgs[hevcDefaultArgs.firstIndex(of: "-bf")! + 1] == "7")
         check("HEVC default has -g 240", hevcDefaultArgs.contains("-g") && hevcDefaultArgs[hevcDefaultArgs.firstIndex(of: "-g")! + 1] == "240")
+
+        // Test 1b: HEVC Speed Priority enabled -> -prio_speed 1
+        let hevcSpeedArgs = QualityArgSpec.buildUpscaleCompressionArgs(
+            codec: "hevc_videotoolbox", usesCRF: false, qualityVal: 68,
+            isBitrate: false, bitrateMbps: 0, svtPreset: 6, longGOP: true, prioritizeSpeed: true
+        )
+        check("HEVC speed priority has -prio_speed 1", hevcSpeedArgs.contains("-prio_speed") && hevcSpeedArgs[hevcSpeedArgs.firstIndex(of: "-prio_speed")! + 1] == "1")
 
         // Test 2: AV1 Visually Lossless default
         let av1DefaultArgs = QualityArgSpec.buildUpscaleCompressionArgs(

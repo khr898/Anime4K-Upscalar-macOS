@@ -203,6 +203,9 @@ final class RawVideoFrameSource {
         }
     }
 
+    /// Direct handle to the underlying Process for termination on user cancel.
+    var processHandle: Process { process }
+
     /// Re-inject a raw frame (from `nextRawFrame`) so the next `nextFrame()`
     /// returns it first. Data is Sendable, so this crosses actor boundaries
     /// cleanly — the probe runs on a detached task and hands the bytes back to
@@ -221,21 +224,55 @@ final class RawVideoFrameSource {
 
     // MARK: - CVPixelBuffer factory (unit-tested)
 
+    private static var poolCache: [String: CVPixelBufferPool] = [:]
+    private static let poolLock = NSLock()
+
+    static func getPool(width: Int, height: Int) -> CVPixelBufferPool? {
+        let key = "\(width)x\(height)"
+        poolLock.lock()
+        defer { poolLock.unlock() }
+        if let pool = poolCache[key] { return pool }
+
+        let poolAttrs: [CFString: Any] = [
+            kCVPixelBufferPoolMinimumBufferCountKey: 4
+        ]
+        let pbAttrs: [CFString: Any] = [
+            kCVPixelBufferPixelFormatTypeKey: kCVPixelFormatType_32BGRA,
+            kCVPixelBufferWidthKey: width,
+            kCVPixelBufferHeightKey: height,
+            kCVPixelBufferBytesPerRowAlignmentKey: 64,
+            kCVPixelBufferMetalCompatibilityKey: true,
+            kCVPixelBufferCGImageCompatibilityKey: true,
+            kCVPixelBufferCGBitmapContextCompatibilityKey: true,
+            kCVPixelBufferIOSurfacePropertiesKey: [:] as [String: Any]
+        ]
+        var pool: CVPixelBufferPool?
+        guard CVPixelBufferPoolCreate(kCFAllocatorDefault, poolAttrs as CFDictionary, pbAttrs as CFDictionary, &pool) == kCVReturnSuccess,
+              let pool else { return nil }
+        poolCache[key] = pool
+        return pool
+    }
+
     /// Wrap tightly-packed BGRA bytes (width*4 per row, no source padding) into
-    /// a 32BGRA CVPixelBuffer. CVPixelBufferCreate may pad `bytesPerRow` for
-    /// alignment; if so, copy row-by-row so pixels land in the right place.
-    /// Copies the bytes — `data` may be freed after this returns.
+    /// a 32BGRA CVPixelBuffer using a reusable CVPixelBufferPool.
     static func makeBGRA(from data: Data, width: Int, height: Int) -> CVPixelBuffer? {
         guard width > 0, height > 0, data.count >= width * height * 4 else { return nil }
         var pb: CVPixelBuffer?
-        let attrs = [
-            kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue!,
-            kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue!,
-            kCVPixelBufferMetalCompatibilityKey: kCFBooleanTrue!
-        ] as CFDictionary
-        guard CVPixelBufferCreate(kCFAllocatorDefault, width, height,
-                                  kCVPixelFormatType_32BGRA, attrs, &pb) == kCVReturnSuccess,
-              let pb else { return nil }
+        if let pool = getPool(width: width, height: height) {
+            CVPixelBufferPoolCreatePixelBuffer(kCFAllocatorDefault, pool, &pb)
+        }
+        if pb == nil {
+            let attrs = [
+                kCVPixelBufferCGImageCompatibilityKey: kCFBooleanTrue!,
+                kCVPixelBufferCGBitmapContextCompatibilityKey: kCFBooleanTrue!,
+                kCVPixelBufferMetalCompatibilityKey: kCFBooleanTrue!,
+                kCVPixelBufferIOSurfacePropertiesKey: [:] as CFDictionary
+            ] as CFDictionary
+            guard CVPixelBufferCreate(kCFAllocatorDefault, width, height,
+                                      kCVPixelFormatType_32BGRA, attrs, &pb) == kCVReturnSuccess,
+                  let _ = pb else { return nil }
+        }
+        guard let pb else { return nil }
         CVPixelBufferLockBaseAddress(pb, [])
         defer { CVPixelBufferUnlockBaseAddress(pb, []) }
         guard let base = CVPixelBufferGetBaseAddress(pb) else { return pb }

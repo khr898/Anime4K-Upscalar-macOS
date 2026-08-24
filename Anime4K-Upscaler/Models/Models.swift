@@ -213,100 +213,128 @@ enum Anime4KMode: Int, CaseIterable, Identifiable, Sendable {
         true
     }
 
-    /// The ordered shader pipeline for this mode.
-    /// Directly mapped from the reference shell script.
-    var shaders: [Anime4KShader] {
+    /// The ordered shader pipeline for this mode given a target resolution scaling factor.
+    /// Emits sequential libplacebo stages matching the CLI pipeline.
+    func shaderPipeline(for resolution: TargetResolution) -> [(shader: Anime4KShader, scales2x: Bool)] {
         if isNeuralSR || isSpecial || isMetalFX { return [] }
+        let scale = resolution.scaleFactor
         switch self {
         case .modeA_HQ:
-            return [
-                .clampHighlights,
-                .restoreCNN_VL,
-                .upscaleCNN_x2_VL,
-                .upscaleCNN_x2_M
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNN_VL, false)]
+            if scale >= 2 { s.append((.upscaleCNN_x2_VL, true)) }
+            if scale >= 4 { s.append((.upscaleCNN_x2_M, true)) }
+            return s
+
         case .modeB_HQ:
-            return [
-                .clampHighlights,
-                .restoreCNNSoft_VL,
-                .upscaleCNN_x2_VL,
-                .upscaleCNN_x2_M
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNNSoft_VL, false)]
+            if scale >= 2 { s.append((.upscaleCNN_x2_VL, true)) }
+            if scale >= 4 { s.append((.upscaleCNN_x2_M, true)) }
+            return s
+
         case .modeC_HQ:
-            return [
-                .clampHighlights,
-                .upscaleDenoiseCNN_x2_VL,
-                .upscaleCNN_x2_M
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false)]
+            if scale >= 2 { s.append((.upscaleDenoiseCNN_x2_VL, true)) }
+            if scale >= 4 { s.append((.upscaleCNN_x2_M, true)) }
+            return s
+
         case .modeAA_HQ:
-            return [
-                .clampHighlights,
-                .restoreCNN_VL,
-                .upscaleCNN_x2_VL,
-                .restoreCNN_M,
-                .upscaleCNN_x2_M
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNN_VL, false)]
+            if scale == 2 {
+                s.append((.upscaleCNN_x2_VL, true))
+                s.append((.restoreCNN_M, false))
+            } else if scale >= 4 {
+                s.append((.upscaleCNN_x2_VL, true))
+                s.append((.restoreCNN_M, false))
+                s.append((.upscaleCNN_x2_M, true))
+            }
+            return s
+
         case .modeBB_HQ:
-            return [
-                .clampHighlights,
-                .restoreCNNSoft_VL,
-                .upscaleCNN_x2_VL,
-                .restoreCNNSoft_M,
-                .upscaleCNN_x2_M
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNNSoft_VL, false)]
+            if scale == 2 {
+                s.append((.upscaleCNN_x2_VL, true))
+                s.append((.restoreCNNSoft_M, false))
+            } else if scale >= 4 {
+                s.append((.upscaleCNN_x2_VL, true))
+                s.append((.restoreCNNSoft_M, false))
+                s.append((.upscaleCNN_x2_M, true))
+            }
+            return s
+
         case .modeCA_HQ:
-            return [
-                .clampHighlights,
-                .upscaleDenoiseCNN_x2_VL,
-                .restoreCNN_M,
-                .upscaleCNN_x2_M
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false)]
+            if scale == 2 {
+                s.append((.upscaleDenoiseCNN_x2_VL, true))
+                s.append((.restoreCNN_M, false))
+            } else if scale >= 4 {
+                s.append((.upscaleDenoiseCNN_x2_VL, true))
+                s.append((.restoreCNN_M, false))
+                s.append((.upscaleCNN_x2_M, true))
+            }
+            return s
+
         case .modeA_Fast:
-            return [
-                .clampHighlights,
-                .restoreCNN_M,
-                .upscaleCNN_x2_M,
-                .upscaleCNN_x2_S
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNN_M, false)]
+            if scale >= 2 { s.append((.upscaleCNN_x2_M, true)) }
+            if scale >= 4 { s.append((.upscaleCNN_x2_S, true)) }
+            return s
+
         case .modeB_Fast:
-            return [
-                .clampHighlights,
-                .restoreCNNSoft_M,
-                .upscaleCNN_x2_M,
-                .upscaleCNN_x2_S
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNNSoft_M, false)]
+            if scale >= 2 { s.append((.upscaleCNN_x2_M, true)) }
+            if scale >= 4 { s.append((.upscaleCNN_x2_S, true)) }
+            return s
+
         case .modeC_Fast:
-            return [
-                .clampHighlights,
-                .upscaleDenoiseCNN_x2_M,
-                .upscaleCNN_x2_S
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false)]
+            if scale >= 2 { s.append((.upscaleDenoiseCNN_x2_M, true)) }
+            if scale >= 4 { s.append((.upscaleCNN_x2_S, true)) }
+            return s
+
         case .modeAA_Fast:
-            return [
-                .clampHighlights,
-                .restoreCNN_M,
-                .upscaleCNN_x2_M,
-                .restoreCNN_S,
-                .upscaleCNN_x2_S
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNN_M, false)]
+            if scale == 2 {
+                s.append((.upscaleCNN_x2_M, true))
+                s.append((.restoreCNN_S, false))
+            } else if scale >= 4 {
+                s.append((.upscaleCNN_x2_M, true))
+                s.append((.restoreCNN_S, false))
+                s.append((.upscaleCNN_x2_S, true))
+            }
+            return s
+
         case .modeBB_Fast:
-            return [
-                .clampHighlights,
-                .restoreCNNSoft_M,
-                .upscaleCNN_x2_M,
-                .restoreCNNSoft_S,
-                .upscaleCNN_x2_S
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false), (.restoreCNNSoft_M, false)]
+            if scale == 2 {
+                s.append((.upscaleCNN_x2_M, true))
+                s.append((.restoreCNNSoft_S, false))
+            } else if scale >= 4 {
+                s.append((.upscaleCNN_x2_M, true))
+                s.append((.restoreCNNSoft_S, false))
+                s.append((.upscaleCNN_x2_S, true))
+            }
+            return s
+
         case .modeCA_Fast:
-            return [
-                .clampHighlights,
-                .upscaleDenoiseCNN_x2_M,
-                .restoreCNN_S,
-                .upscaleCNN_x2_S
-            ]
+            var s: [(Anime4KShader, Bool)] = [(.clampHighlights, false)]
+            if scale == 2 {
+                s.append((.upscaleDenoiseCNN_x2_M, true))
+                s.append((.restoreCNN_S, false))
+            } else if scale >= 4 {
+                s.append((.upscaleDenoiseCNN_x2_M, true))
+                s.append((.restoreCNN_S, false))
+                s.append((.upscaleCNN_x2_S, true))
+            }
+            return s
+
         default:
             return []
         }
+    }
+
+    /// Backwards-compatible shader array (full 4x chain).
+    var shaders: [Anime4KShader] {
+        shaderPipeline(for: .quadruple).map(\.shader)
     }
 }
 
@@ -694,15 +722,17 @@ struct JobConfiguration: Sendable, Equatable {
     var codec: VideoCodec
     var compression: CompressionMode
     var longGOPEnabled: Bool
+    var prioritizeSpeed: Bool = false
     var svtAV1Preset: Int = 6
 
-    /// Default configuration: Mode A (HQ), 2x, HEVC Hardware, Visually Lossless, Long GOP on.
+    /// Default configuration: Mode A (HQ), 2x, HEVC Hardware, Visually Lossless, Long GOP on, Prioritize Speed off.
     static let `default` = JobConfiguration(
         mode: .modeA_HQ,
         resolution: .double,
         codec: .hevcVideoToolbox,
         compression: .visuallyLossless,
         longGOPEnabled: true,
+        prioritizeSpeed: false,
         svtAV1Preset: 6
     )
 
@@ -712,6 +742,7 @@ struct JobConfiguration: Sendable, Equatable {
         lhs.codec == rhs.codec &&
         lhs.compression == rhs.compression &&
         lhs.longGOPEnabled == rhs.longGOPEnabled &&
+        lhs.prioritizeSpeed == rhs.prioritizeSpeed &&
         lhs.svtAV1Preset == rhs.svtAV1Preset
     }
 }
@@ -858,34 +889,30 @@ struct FilterGraphBuilder {
         codec: VideoCodec,
         shaderDirectory: String
     ) -> String {
-        let shaders = mode.shaders
+        let stages = mode.shaderPipeline(for: resolution)
+        guard !stages.isEmpty else {
+            return "format=\(codec.pixelFormat)"
+        }
+
         var filterComponents: [String] = []
+        filterComponents.append("hwupload")
 
-        if !shaders.isEmpty {
-            // Concatenate all active shaders for the mode into a single combined shader.
-            // Executing all passes (Restore, Upscale, Denoise) within ONE libplacebo filter
-            // allows libplacebo's internal renderer to manage render-pass dependencies and
-            // texture barriers, eliminating inter-filter GPU race conditions on Apple Silicon.
-            let combinedPath = ShaderCombiner.combinedShaderPath(
-                shaders: shaders, directory: shaderDirectory)
-            let escapedPath = combinedPath.replacingOccurrences(of: "'", with: "'\\''")
+        for (shader, scales2x) in stages {
+            let shaderPath = (shaderDirectory as NSString).appendingPathComponent(shader.rawValue)
+            let escapedPath = shaderPath.replacingOccurrences(of: "'", with: "'\\''")
 
-            filterComponents.append("hwupload")
-
-            let scale = resolution.scaleFactor
-            if scale > 1 {
+            if scales2x {
                 filterComponents.append(
-                    "libplacebo=w=iw*\(scale):h=ih*\(scale):custom_shader_path='\(escapedPath)':format=\(codec.pixelFormat)"
+                    "libplacebo=w=iw*2:h=ih*2:custom_shader_path='\(escapedPath)':format=\(codec.pixelFormat)"
                 )
             } else {
                 filterComponents.append(
                     "libplacebo=custom_shader_path='\(escapedPath)':format=\(codec.pixelFormat)"
                 )
             }
-
-            filterComponents.append("hwdownload")
         }
 
+        filterComponents.append("hwdownload")
         filterComponents.append("format=\(codec.pixelFormat)")
         return filterComponents.joined(separator: ",")
     }
@@ -964,7 +991,7 @@ struct FFmpegArgumentBuilder {
         case .hevcVideoToolbox:
             args.append(contentsOf: [
                 "-profile:v", "main10",
-                "-prio_speed", "1",
+                "-prio_speed", configuration.prioritizeSpeed ? "1" : "0",
                 "-allow_sw", "1",
                 "-bf", "7"
             ])

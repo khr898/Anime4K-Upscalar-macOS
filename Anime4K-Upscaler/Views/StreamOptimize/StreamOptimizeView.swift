@@ -300,6 +300,23 @@ private struct StreamOptimizeConfigView: View {
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
+
+                if viewModel.encoder != .svtAV1 {
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    Toggle(isOn: $vm.prioritizeSpeed) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Prioritize Encoding Speed")
+                                .font(.subheadline)
+                            Text(viewModel.prioritizeSpeed ? "Fastest throughput (disables deep RDO)" : "Maximum quality with deep rate-distortion optimization")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                    .tint(.teal)
+                }
             }
             .padding(4)
         }
@@ -797,24 +814,20 @@ private struct StreamOptimizeProcessingView: View {
 
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 1) {
-                        ForEach(Array(job.logLines.enumerated()), id: \.offset) { index, line in
-                            Text(line)
-                                .font(.system(.caption2, design: .monospaced))
-                                .foregroundStyle(.secondary)
-                                .textSelection(.enabled)
-                                .id(index)
-                        }
-                    }
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
+                    Text(job.logLines.joined(separator: "\n"))
+                        .font(.system(.caption2, design: .monospaced))
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .multilineTextAlignment(.leading)
+                        .padding(.horizontal, 12)
+                        .padding(.vertical, 4)
+                        .id("streamLogBottom")
                 }
                 .frame(height: 120)
                 .background(Color(.textBackgroundColor).opacity(0.5))
                 .onChange(of: job.logLines.count) {
-                    if let last = job.logLines.indices.last {
-                        proxy.scrollTo(last, anchor: .bottom)
-                    }
+                    proxy.scrollTo("streamLogBottom", anchor: .bottom)
                 }
             }
         }

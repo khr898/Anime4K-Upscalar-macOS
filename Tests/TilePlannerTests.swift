@@ -110,8 +110,9 @@ struct TilePlannerTests {
         do {
             let plans = TilePlanner.plans(frameW: 20, frameH: 20, tileW: 10, tileH: 10, overlap: 0)
             check("overlap0 count", plans.count == 4, "got \(plans.count)")
-            let allFull = plans.allSatisfy { $0.validW == 10 && $0.validH == 10 &&
-                                             $0.validLeft == 0 && $0.validTop == 0 }
+            let allFull = plans.allSatisfy { p in
+                p.validW == 10 && p.validH == 10 && p.validLeft == 0 && p.validTop == 0
+            }
             check("overlap0 valid==tile", allFull)
             // Origins should be exactly the 4 corners (0,0),(10,0),(0,10),(10,10).
             let origins = Set(plans.map { "\($0.topX),\($0.topY)" })
@@ -125,8 +126,9 @@ struct TilePlannerTests {
         do {
             let plans = TilePlanner.plans(frameW: 16, frameH: 10, tileW: 10, tileH: 6, overlap: 2)
             check("non-square count > 0", plans.count > 0, "got \(plans.count)")
-            let noNegatives = plans.allSatisfy { $0.validW >= 0 && $0.validH >= 0 &&
-                                                 $0.cropW > 0 && $0.cropH > 0 }
+            let noNegatives = plans.allSatisfy { p in
+                p.validW >= 0 && p.validH >= 0 && p.cropW > 0 && p.cropH > 0
+            }
             check("non-square no negative regions", noNegatives)
             // Every valid dest + size stays within the frame.
             let inFrame = plans.allSatisfy { p -> Bool in
@@ -141,10 +143,33 @@ struct TilePlannerTests {
             check("zero frame empty", TilePlanner.plans(frameW: 0, frameH: 0, tileW: 10, tileH: 10, overlap: 2).isEmpty)
             check("zero tile empty", TilePlanner.plans(frameW: 10, frameH: 10, tileW: 0, tileH: 0, overlap: 2).isEmpty)
             check("neg dims empty", TilePlanner.plans(frameW: -5, frameH: 5, tileW: 10, tileH: 10, overlap: 2).isEmpty)
-            // overlap >= tile → stepX = max(1, tileW - 2*overlap) = max(1, neg) = 1; must still
-            // terminate and stay in-frame (guard against infinite loop / negative step).
             let big = TilePlanner.plans(frameW: 12, frameH: 12, tileW: 10, tileH: 10, overlap: 10)
             check("overlap>=tile terminates", big.allSatisfy { $0.validW >= 0 && $0.validH >= 0 })
+        }
+
+        // --- Case 8: 1080p with 512x512 tiles (step 480 with overlap 16). ---
+        do {
+            let plans = TilePlanner.plans(frameW: 1920, frameH: 1080, tileW: 512, tileH: 512, overlap: 16)
+            check("1080p 512x512 tile count == 12", plans.count == 12, "got \(plans.count)")
+            let allInFrame = plans.allSatisfy { p in
+                let ox = p.topX + p.validLeft, oy = p.topY + p.validTop
+                return ox >= 0 && oy >= 0 && (ox + p.validW) <= 1920 && (oy + p.validH) <= 1080
+            }
+            check("1080p 512x512 all tiles in frame", allInFrame)
+        }
+
+        // --- Case 9: 1080p full-frame bypass (1920x1080 tile). ---
+        do {
+            let plans = TilePlanner.plans(frameW: 1920, frameH: 1080, tileW: 1920, tileH: 1080, overlap: 16)
+            check("full-frame count == 1", plans.count == 1)
+            let p = plans[0]
+            check("full-frame valid == 1920x1080", p.validW == 1920 && p.validH == 1080 && p.validLeft == 0 && p.validTop == 0)
+        }
+
+        // --- Case 10: 4K (3840x2160) with 512x512 tiles. ---
+        do {
+            let plans = TilePlanner.plans(frameW: 3840, frameH: 2160, tileW: 512, tileH: 512, overlap: 16)
+            check("4K 512x512 tile count == 40", plans.count == 40, "got \(plans.count)")
         }
 
         print("\n\(passed) passed, \(failed) failed")

@@ -297,6 +297,7 @@ struct StreamOptimizeConfiguration: Sendable, Equatable {
     var keyframeInterval: KeyframeInterval = .twoSeconds
     var faststart: Bool                = true
     var allowSWFallback: Bool          = true
+    var prioritizeSpeed: Bool          = false
 
     /// Production-ready defaults optimized for streaming delivery.
     static let `default` = StreamOptimizeConfiguration()
@@ -396,6 +397,7 @@ struct StreamOptimizeArgumentBuilder {
             args.append(contentsOf: [
                 "-c:v", "hevc_videotoolbox",
                 "-q:v", "\(configuration.quality)",
+                "-prio_speed", configuration.prioritizeSpeed ? "1" : "0",
                 "-profile:v", configuration.profile.rawValue,
                 "-pix_fmt", configuration.pixelFormat.rawValue
             ])
@@ -408,6 +410,7 @@ struct StreamOptimizeArgumentBuilder {
             args.append(contentsOf: [
                 "-c:v", "h264_videotoolbox",
                 "-q:v", "\(configuration.quality)",
+                "-prio_speed", configuration.prioritizeSpeed ? "1" : "0",
                 "-profile:v", configuration.profile.rawValue,
                 "-pix_fmt", configuration.pixelFormat.rawValue
             ])

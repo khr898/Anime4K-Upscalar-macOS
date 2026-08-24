@@ -32,10 +32,20 @@ enum TilePlanner {
                       tileW: Int, tileH: Int,
                       overlap: Int) -> [Plan] {
         guard frameW > 0, frameH > 0, tileW > 0, tileH > 0 else { return [] }
-        let stepX = max(1, tileW - 2 * overlap)
-        let stepY = max(1, tileH - 2 * overlap)
 
-        var seen: Set<Int> = []          // dedup key = topX * 100_000 + topY (dims are frame pixels)
+        // Full-frame bypass when tile meets or exceeds frame geometry
+        if tileW >= frameW && tileH >= frameH {
+            return [Plan(topX: 0, topY: 0,
+                         cropW: frameW, cropH: frameH,
+                         validLeft: 0, validTop: 0,
+                         validW: frameW, validH: frameH)]
+        }
+
+        let effectiveOverlap = max(0, min(overlap, min(tileW, tileH) / 4))
+        let stepX = max(1, tileW - 2 * effectiveOverlap)
+        let stepY = max(1, tileH - 2 * effectiveOverlap)
+
+        var seen: Set<Int64> = []          // 64-bit dedup key = (topX << 32) | topY
         var out: [Plan] = []
         var y = 0
         while y < frameH {
@@ -45,11 +55,11 @@ enum TilePlanner {
                 let topX = min(x, max(0, frameW - tileW))
                 let cropW = min(tileW, frameW - topX)
                 let cropH = min(tileH, frameH - topY)
-                let validLeft  = (topX == 0) ? 0 : overlap
-                let validTop   = (topY == 0) ? 0 : overlap
-                let validRight = (topX + tileW >= frameW) ? cropW : cropW - overlap
-                let validBot   = (topY + tileH >= frameH) ? cropH : cropH - overlap
-                let key = topX * 100_000 + topY
+                let validLeft  = (topX == 0) ? 0 : effectiveOverlap
+                let validTop   = (topY == 0) ? 0 : effectiveOverlap
+                let validRight = (topX + tileW >= frameW) ? cropW : cropW - effectiveOverlap
+                let validBot   = (topY + tileH >= frameH) ? cropH : cropH - effectiveOverlap
+                let key = (Int64(topX) << 32) | Int64(topY)
                 if !seen.contains(key) {
                     seen.insert(key)
                     out.append(Plan(topX: topX, topY: topY,

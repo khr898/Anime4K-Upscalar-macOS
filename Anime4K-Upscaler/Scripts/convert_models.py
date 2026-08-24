@@ -168,7 +168,7 @@ def convert(net, out_path, H=TILE, W=TILE):
                              scale=1.0 / 255.0, color_layout=ct.colorlayout.RGB)],
         outputs=[ct.ImageType(name="output", color_layout=ct.colorlayout.RGB)],
         convert_to="mlprogram",
-        compute_units=ct.ComputeUnit.CPU_AND_NE,
+        compute_units=ct.ComputeUnit.ALL if (H >= 512 or W >= 512) else ct.ComputeUnit.CPU_AND_NE,
         compute_precision=ct.precision.FLOAT16,
         minimum_deployment_target=ct.target.macOS14,
     )

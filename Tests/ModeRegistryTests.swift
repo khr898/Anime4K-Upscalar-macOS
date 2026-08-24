@@ -5,7 +5,6 @@
 
 import Foundation
 
-@main
 struct ModeRegistryTests {
     static func main() {
         var passed = 0
@@ -53,7 +52,10 @@ struct ModeRegistryTests {
             check("Mode \(mode.rawValue) contains upscaling shader", shaders.contains { $0.isUpscaler })
         }
 
-        print("\n\(passed) passed, \(failed) failed")
+        print("\nModeRegistryTests Results: \(passed) passed, \(failed) failed\n")
         if failed > 0 { exit(1) }
     }
 }
+
+ModeRegistryTests.main()
+

@@ -195,6 +195,22 @@ struct ConfigurationPanel: View {
                 Text(viewModel.configuration.codec.subtitle)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+
+                if viewModel.configuration.codec == .hevcVideoToolbox {
+                    Divider()
+                        .padding(.vertical, 2)
+
+                    Toggle(isOn: $viewModel.configuration.prioritizeSpeed) {
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text("Prioritize Encoding Speed")
+                                .font(.subheadline)
+                            Text(viewModel.configuration.prioritizeSpeed ? "Fastest throughput (disables deep RDO)" : "Maximum quality with deep rate-distortion optimization")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    .toggleStyle(.switch)
+                }
             }
             .padding(4)
         }

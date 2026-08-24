@@ -135,22 +135,35 @@ struct DurationProbe {
 
     // MARK: - Batch Probe
 
-    /// Probe multiple files concurrently, returning results keyed by URL.
+    /// Probe multiple files concurrently with bounded concurrency (max 8 parallel ffprobe tasks).
     /// - Parameter urls: Array of video file URLs to probe.
+    /// - Parameter maxConcurrent: Maximum parallel ffprobe processes.
     /// - Returns: Dictionary mapping each URL to its probe result (nil if probe failed).
-    static func batchProbe(urls: [URL]) async -> [URL: ProbeResult?] {
-        await withTaskGroup(of: (URL, ProbeResult?).self, returning: [URL: ProbeResult?].self) { group in
-            for url in urls {
-                group.addTask {
-                    let result = await probe(url: url)
-                    return (url, result)
+    static func batchProbe(urls: [URL], maxConcurrent: Int = 8) async -> [URL: ProbeResult?] {
+        guard !urls.isEmpty else { return [:] }
+        return await withTaskGroup(of: (URL, ProbeResult?).self, returning: [URL: ProbeResult?].self) { group in
+            var results: [URL: ProbeResult?] = [:]
+            var urlIterator = urls.makeIterator()
+
+            for _ in 0..<min(maxConcurrent, urls.count) {
+                if let nextURL = urlIterator.next() {
+                    group.addTask {
+                        let result = await probe(url: nextURL)
+                        return (nextURL, result)
+                    }
                 }
             }
 
-            var results: [URL: ProbeResult?] = [:]
             for await (url, result) in group {
                 results[url] = result
+                if let nextURL = urlIterator.next() {
+                    group.addTask {
+                        let res = await probe(url: nextURL)
+                        return (nextURL, res)
+                    }
+                }
             }
+
             return results
         }
     }

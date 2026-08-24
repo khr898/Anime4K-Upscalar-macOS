@@ -27,7 +27,8 @@ final class CoreMLUpscaler {
     init(compiledModelURL compiledURL: URL) throws {
         let modelName = compiledURL.deletingPathExtension().lastPathComponent
         let config = MLModelConfiguration()
-        config.computeUnits = .cpuAndNeuralEngine          // explicit ANE routing
+        config.computeUnits = .all                        // Hybrid ANE + GPU compute routing
+        config.allowLowPrecisionAccumulationOnGPU = true
         let model = try MLModel(contentsOf: compiledURL, configuration: config)
         self.model = model
 
@@ -114,6 +115,22 @@ final class CoreMLUpscaler {
     ///      pipelines queued predictions; `MLModel.prediction` is thread-safe.
     /// The tile PLAN (positions + valid regions) is identical to the old code,
     /// so seam handling is unchanged — only the transport changed.
+    private var tilePool: [CVPixelBuffer] = []
+    private var pooledTileSize: (w: Int, h: Int) = (0, 0)
+
+    private func getPooledTiles(count: Int, tileW: Int, tileH: Int) -> [CVPixelBuffer] {
+        if pooledTileSize.w != tileW || pooledTileSize.h != tileH || tilePool.count < count {
+            tilePool.removeAll(keepingCapacity: true)
+            for _ in 0..<count {
+                if let pb = Self.makePixelBuffer(tileW, tileH) {
+                    tilePool.append(pb)
+                }
+            }
+            pooledTileSize = (tileW, tileH)
+        }
+        return Array(tilePool.prefix(count))
+    }
+
     func upscale(_ inputBuffer: CVPixelBuffer, targetScale: Int) throws -> CVPixelBuffer {
         let width = CVPixelBufferGetWidth(inputBuffer)
         let height = CVPixelBufferGetHeight(inputBuffer)
@@ -126,13 +143,10 @@ final class CoreMLUpscaler {
 
         let (tw, th) = chooseTile(width: width, height: height)
 
-        // Tile plan (positions + clamped crop sizes + valid regions) factored
-        // into TilePlanner so the edge-clamp + overlap-halo math is unit-tested
-        // (Tests/TilePlannerTests.swift). Deduped by (topX,topY): the step
-        // iteration used to emit clamped duplicates at the far edge that crop,
-        // infer, and blit identical regions — same output, less wasted dispatch.
         let plans = TilePlanner.plans(frameW: width, frameH: height,
                                       tileW: tw, tileH: th, overlap: overlap)
+
+        let pooledBuffers = getPooledTiles(count: plans.count, tileW: tw, tileH: th)
 
         // --- Crop all tiles via memcpy from the source CVPixelBuffer (locked once). ---
         CVPixelBufferLockBaseAddress(inputBuffer, [.readOnly])
@@ -140,8 +154,15 @@ final class CoreMLUpscaler {
         tileInputs.reserveCapacity(plans.count)
         if let srcBase = CVPixelBufferGetBaseAddress(inputBuffer) {
             let srcBPR = CVPixelBufferGetBytesPerRow(inputBuffer)
-            for p in plans {
-                guard let tb = Self.makePixelBuffer(tw, th) else { continue }
+            for (idx, p) in plans.enumerated() {
+                let tb: CVPixelBuffer
+                if idx < pooledBuffers.count {
+                    tb = pooledBuffers[idx]
+                } else if let newPb = Self.makePixelBuffer(tw, th) {
+                    tb = newPb
+                } else {
+                    continue
+                }
                 Self.cropMemcpy(srcBase: srcBase, srcBPR: srcBPR,
                                 dst: tb, topX: p.topX, topY: p.topY,
                                 cropW: p.cropW, cropH: p.cropH, tileW: tw, tileH: th)
@@ -150,12 +171,16 @@ final class CoreMLUpscaler {
         }
         CVPixelBufferUnlockBaseAddress(inputBuffer, [.readOnly])
 
-        // --- Concurrent inference. ANE pipelines queued predictions; prediction
-        // is thread-safe. Bounded so we don't flood the engine past its sweet spot. ---
-        let outTiles = try Self.concurrentInfer(model: model,
-                                                 inputName: inputName, outputName: outputName,
-                                                 inputs: tileInputs,
-                                                 maxConcurrent: Self.inferConcurrency)
+        // --- Batch inference on ANE with concurrent fallback. ---
+        let outTiles = try Self.inferTiles(model: model,
+                                          inputName: inputName, outputName: outputName,
+                                          inputs: tileInputs,
+                                          maxConcurrent: Self.inferConcurrency)
+
+        guard !outTiles.contains(where: { $0 == nil }) else {
+            throw NSError(domain: "CoreMLUpscaler", code: 502,
+                          userInfo: [NSLocalizedDescriptionKey: "Incomplete tile inference: one or more tiles produced nil output."])
+        }
 
         // --- Blit valid regions via memcpy into the native output buffer (locked once). ---
         CVPixelBufferLockBaseAddress(nativeBuffer, [])
@@ -190,17 +215,31 @@ final class CoreMLUpscaler {
     // MARK: - Internals
 
     private func chooseTile(width: Int, height: Int) -> (Int, Int) {
-        // Largest enumerated tile that does not exceed the frame; fall back to the smallest.
         for t in tiles where t.w <= width && t.h <= height { return (t.w, t.h) }
         return tiles.last ?? (160, 90)
     }
 
-    /// Max concurrent `model.prediction` calls. ANE pipelines queued work but
-    /// floods past ~8 in flight just add context-switch + memory pressure for
-    /// tiny 128×128 tiles. Bounded by a semaphore in `concurrentInfer`.
-    /// ponytail: fixed 8 — if a future model shows better throughput at higher
-    /// fan-out, make this adaptive on model+tile size.
     private static let inferConcurrency = 8
+
+    private static func inferTiles(model: MLModel,
+                                   inputName: String, outputName: String,
+                                   inputs: [CVPixelBuffer],
+                                   maxConcurrent: Int) throws -> [CVPixelBuffer?] {
+        do {
+            let featureProviders = try inputs.map {
+                try MLDictionaryFeatureProvider(dictionary: [inputName: MLFeatureValue(pixelBuffer: $0)])
+            }
+            let batch = MLArrayBatchProvider(array: featureProviders)
+            let batchOut = try model.predictions(fromBatch: batch)
+            var outputs = [CVPixelBuffer?](repeating: nil, count: inputs.count)
+            for i in 0..<batchOut.count {
+                outputs[i] = batchOut.features(at: i).featureValue(for: outputName)?.imageBufferValue
+            }
+            return outputs
+        } catch {
+            return try concurrentInfer(model: model, inputName: inputName, outputName: outputName, inputs: inputs, maxConcurrent: maxConcurrent)
+        }
+    }
 
     /// Run `model.prediction` over `inputs` concurrently, bounded by
     /// `maxConcurrent`. `MLModel.prediction` is documented thread-safe; the ANE

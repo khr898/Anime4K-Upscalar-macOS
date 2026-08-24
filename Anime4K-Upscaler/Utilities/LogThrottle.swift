@@ -12,7 +12,7 @@ final class LogThrottle {
 
     private let interval: TimeInterval
     private let sink: (String) -> Void
-    private let bufQueue = DispatchQueue(label: "a4k.logthrottle.buffer")
+    private let lock = NSLock()
     private var lines: [String] = []
     private var timer: DispatchSourceTimer?
 
@@ -30,12 +30,16 @@ final class LogThrottle {
 
     /// Append a line. Cheap: lock + array append. No Task, no actor hop.
     func append(_ line: String) {
-        bufQueue.sync { lines.append(line) }
+        lock.lock()
+        lines.append(line)
+        lock.unlock()
     }
 
     private func flushSync() {
-        var snapshot: [String] = []
-        bufQueue.sync { snapshot = lines; lines.removeAll(keepingCapacity: true) }
+        lock.lock()
+        let snapshot = lines
+        lines.removeAll(keepingCapacity: true)
+        lock.unlock()
         guard !snapshot.isEmpty else { return }
         sink(snapshot.joined(separator: "\n"))
     }

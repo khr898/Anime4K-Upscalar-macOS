@@ -42,6 +42,7 @@ final class MetalFXUpscaler {
     /// When nil, upscale() returns the scaler output directly.
     private let applySharpen: Bool
     private var sharpenPipeline: MTLComputePipelineState?
+    private let inFlightSemaphore = DispatchSemaphore(value: 3)
 
     enum Error: LocalizedError {
         case noDevice, unsupportedDevice, scalerInit(String), noCommandBuffer
@@ -81,8 +82,12 @@ final class MetalFXUpscaler {
             self.featureTier = .metal3
         }
 
+        CVMetalTextureCacheCreate(kCFAllocatorDefault, nil, device, nil, &textureCache)
+
         if applySharpen { try buildSharpenPipeline() }
     }
+
+    private var textureCache: CVMetalTextureCache?
 
     func upscale(_ input: CVPixelBuffer, targetScale: Int) throws -> CVPixelBuffer {
         let inW = CVPixelBufferGetWidth(input), inH = CVPixelBufferGetHeight(input)
@@ -93,6 +98,9 @@ final class MetalFXUpscaler {
             throw Error.scalerInit("scaler not initialized for \(inW)x\(inH) → \(outW)x\(outH)")
         }
 
+        // Wait for an available slot in the 3-buffer ring
+        inFlightSemaphore.wait()
+
         // Cycle through triple-buffer ring to ensure non-aliased backing memory
         // while downstream AVAssetWriter asynchronously encodes previous frame.
         let slot = outputSlots[slotIndex]
@@ -102,26 +110,27 @@ final class MetalFXUpscaler {
         scaler.colorTexture = inTexture
         scaler.outputTexture = slot.outTexture
 
-        // Pass 1: MetalFX spatial upscale. Committed + waited before the sharpen
-        // compute reads the output — a second command buffer avoids any
-        // cross-encoder read-after-write hazard on outTexture's IOSurface.
-        guard let cmd = queue.makeCommandBuffer() else { throw Error.noCommandBuffer }
+        guard let cmd = queue.makeCommandBuffer() else {
+            inFlightSemaphore.signal()
+            throw Error.noCommandBuffer
+        }
         scaler.encode(commandBuffer: cmd)
-        cmd.commit()
-        cmd.waitUntilCompleted()
 
         guard applySharpen, let pipeline = sharpenPipeline,
               let readView = slot.scalerReadView, let sharpTex = slot.sharpTexture,
               let sharpPB = slot.sharpPixelBuffer else {
+            cmd.commit()
+            cmd.waitUntilCompleted()
+            inFlightSemaphore.signal()
             return slot.outPixelBuffer
         }
 
-        // Pass 2: contrast-gated unsharp mask. Reads the scaler output (non-srgb
-        // view → operates on raw sRGB bytes, perceptual sharpen as 3DSnickerStream
-        // does), writes the sharp pixelbuffer. 16×16 threadgroups, bounds-checked
-        // in-kernel so edge tiles are safe without a nonuniform dispatch.
-        guard let sCmd = queue.makeCommandBuffer() else { throw Error.noCommandBuffer }
+        guard let sCmd = queue.makeCommandBuffer() else {
+            inFlightSemaphore.signal()
+            throw Error.noCommandBuffer
+        }
         guard let enc = sCmd.makeComputeCommandEncoder() else {
+            inFlightSemaphore.signal()
             throw Error.sharpenPipeline("compute encoder")
         }
         enc.setComputePipelineState(pipeline)
@@ -133,9 +142,18 @@ final class MetalFXUpscaler {
                          height: (outH + groupH - 1) / groupH, depth: 1)
         enc.dispatchThreadgroups(ng, threadsPerThreadgroup: tg)
         enc.endEncoding()
+
+        cmd.commit()
         sCmd.commit()
         sCmd.waitUntilCompleted()
+        inFlightSemaphore.signal()
         return sharpPB
+    }
+
+    /// Drain all in-flight GPU commands.
+    func flush() {
+        for _ in 0..<3 { inFlightSemaphore.wait() }
+        for _ in 0..<3 { inFlightSemaphore.signal() }
     }
 
     private func ensureScaler(inW: Int, inH: Int, outW: Int, outH: Int) throws {
@@ -260,6 +278,23 @@ kernel void contrast_gated_unsharp(
     private func makeTexture(from pb: CVPixelBuffer, width: Int, height: Int,
                              usage: MTLTextureUsage,
                              pixelFormat: MTLPixelFormat = .bgra8Unorm_srgb) throws -> MTLTexture {
+        if let cache = textureCache {
+            var cvTexture: CVMetalTexture?
+            let status = CVMetalTextureCacheCreateTextureFromImage(
+                kCFAllocatorDefault,
+                cache,
+                pb,
+                nil,
+                pixelFormat,
+                width,
+                height,
+                0,
+                &cvTexture
+            )
+            if status == kCVReturnSuccess, let cvTexture, let tex = CVMetalTextureGetTexture(cvTexture) {
+                return tex
+            }
+        }
         guard let io = CVPixelBufferGetIOSurface(pb)?.takeUnretainedValue() else { throw Error.notIOSurface }
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: pixelFormat, width: width, height: height, mipmapped: false)

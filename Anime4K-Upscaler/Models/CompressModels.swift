@@ -119,6 +119,7 @@ struct CompressConfiguration: Sendable, Equatable {
     var contentType: ContentType = .liveAction
     var bFrames: Int = 3
     var longGOPEnabled: Bool = false
+    var prioritizeSpeed: Bool = false
 
     static let `default` = CompressConfiguration()
 }
@@ -233,6 +234,7 @@ struct CompressArgumentBuilder {
             args.append(contentsOf: [
                 "-c:v", "hevc_videotoolbox",
                 "-q:v", "\(configuration.quality)",
+                "-prio_speed", configuration.prioritizeSpeed ? "1" : "0",
                 "-pix_fmt", "yuv420p10le"
             ])
 

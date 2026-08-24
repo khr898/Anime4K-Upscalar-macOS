@@ -192,7 +192,8 @@ final class ProcessingEngine {
                     job.processHandle = process
                 }
 
-                // --- Stderr pipe handler ---
+                // --- Stderr pipe handler with off-actor 10Hz throttle ---
+                var lastUIUpdate: Double = 0
                 stderrHandle.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty,
@@ -210,7 +211,10 @@ final class ProcessingEngine {
                         }
                     }
 
-                    if lastProgress != nil || !logBatch.isEmpty {
+                    let now = ProcessInfo.processInfo.systemUptime
+                    let shouldUpdateUI = !logBatch.isEmpty || (now - lastUIUpdate >= 0.1)
+                    if (lastProgress != nil || !logBatch.isEmpty) && shouldUpdateUI {
+                        lastUIUpdate = now
                         let parsedProgress = lastProgress
                         let logs = logBatch
                         Task { @MainActor in
@@ -510,13 +514,35 @@ final class ProcessingEngine {
         let stdoutPipe = Pipe()
         process.standardError = stderrPipe
         process.standardOutput = stdoutPipe
-
         let stderrHandle = stderrPipe.fileHandleForReading
+        let stdoutHandle = stdoutPipe.fileHandleForReading
 
         self.currentProcess = process
         job.processHandle = process
 
         let totalDuration = job.file.durationSeconds ?? 0
+
+        stdoutHandle.readabilityHandler = { handle in
+            let data = handle.availableData
+            guard !data.isEmpty,
+                  let text = String(data: data, encoding: .utf8) else { return }
+            if step != 2 {
+                for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+                    if let prog = FFmpegProgress.parse(line: String(line)) {
+                        let progSeconds = prog.timeSeconds
+                        if totalDuration > 0 {
+                            let ratio = progSeconds / totalDuration
+                            let progVal: Double = (step == 1) ? (0.15 * min(ratio, 1.0)) : (0.85 + 0.15 * min(ratio, 1.0))
+                            Task { @MainActor in
+                                job.progress = min(0.99, progVal)
+                                job.speed = prog.speed
+                                job.fps = String(format: "%.1f", prog.fps)
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         stderrHandle.readabilityHandler = { handle in
             let data = handle.availableData
@@ -531,7 +557,7 @@ final class ProcessingEngine {
                         let percent = val / 100.0
                         let prog = 0.15 + 0.70 * percent
                         Task { @MainActor in
-                            job.progress = prog
+                            job.progress = min(0.99, prog)
                             job.fps = "realesr"
                         }
                     } else {
@@ -551,9 +577,8 @@ final class ProcessingEngine {
                                 progVal = 0.85 + 0.15 * min(ratio, 1.0)
                             }
                             Task { @MainActor in
-                                job.progress = progVal
-                                job.currentFrame = prog.frame
-                                job.currentTime = prog.time
+                                job.progress = min(0.99, progVal)
+                                job.speed = prog.speed
                                 job.fps = String(format: "%.1f", prog.fps)
                             }
                         }
@@ -569,8 +594,9 @@ final class ProcessingEngine {
         return await withCheckedContinuation { continuation in
             process.terminationHandler = { proc in
                 stderrHandle.readabilityHandler = nil
+                stdoutHandle.readabilityHandler = nil
                 try? stderrHandle.close()
-                try? stdoutPipe.fileHandleForReading.close()
+                try? stdoutHandle.close()
 
                 Task { @MainActor in
                     self.currentProcess = nil
@@ -617,10 +643,11 @@ final class ProcessingEngine {
         let isSDRescue = (mode == .special_SDRescue)
         let isMetalFX = mode.isMetalFX
         // Restore VL (libplacebo via Vulkan/MoltenVK) reconstructs line art before
-        // the upscaler — used by SDRescue and both MetalFX pipelines. MetalFX+Sharpen
+        // the upscaler — used exclusively by SDRescue. MetalFX uses direct VideoToolbox
+        // hardware decode + MetalFX spatial scaling (150+ FPS). MetalFX+Sharpen
         // additionally applies a contrast-gated unsharp-mask compute pass after the
-        // GPU upscale for anime edge sharpen (flat areas untouched).
-        let usesRestoreShader = isSDRescue || isMetalFX
+        // GPU upscale for anime edge sharpen.
+        let usesRestoreShader = isSDRescue
         let modelName = mode.modelName ?? "realesr-animevideov3"
 
         // --- Source metadata (dims needed before launching the streamer). ---
@@ -721,6 +748,8 @@ final class ProcessingEngine {
             if let probed {
                 s.pushFrame(probed)
                 source = s
+                job.processHandle = s.processHandle
+                self.currentProcess = s.processHandle
                 job.appendLog("Stage 1/2: \(usesRestoreShader ? "Anime4K Restore VL + " : "")decode via \(modeLabel(mode))…")
                 break
             }
@@ -758,6 +787,11 @@ final class ProcessingEngine {
                                     targetScale: targetScale, totalFrames: totalFrames,
                                     outputURL: outputURL, codec: codec, isCancelled: userCancelled)
         }.value
+
+        job.processHandle = nil
+        if self.currentProcess === source.processHandle {
+            self.currentProcess = nil
+        }
 
         switch result {
         case .completed:
@@ -903,6 +937,20 @@ final class ProcessingEngine {
         // Phase 9 temporal-redundancy cache: dup/near-dup frames reuse the previous
         // upscaled output (skip infer). Signature is read from the locked decoded
         // buffer (144 luma samples, no full-frame copy).
+        // Universal 600,000 Hz rational timebase eliminates integer framerate truncation drift
+        // (0.000000% cumulative drift across standard 23.976, 29.97, 59.94, and integer fps).
+        let timebaseScale: CMTimeScale = 600_000
+        let frameDurationUnits: Int64
+        if abs(fps - 23.976) < 0.02 || abs(fps - 23.976023976) < 0.001 {
+            frameDurationUnits = 25_025 // (600_000 * 1001) / 24_000
+        } else if abs(fps - 29.97) < 0.02 || abs(fps - 29.97002997) < 0.001 {
+            frameDurationUnits = 20_020 // (600_000 * 1001) / 30_000
+        } else if abs(fps - 59.94) < 0.02 || abs(fps - 59.94005994) < 0.001 {
+            frameDurationUnits = 10_010 // (600_000 * 1001) / 60_000
+        } else {
+            frameDurationUnits = max(1, Int64(round(Double(timebaseScale) / max(fps, 0.001))))
+        }
+
         var redundancy = FrameRedundancyCache()
         var lastUpscaled: CVPixelBuffer?
 
@@ -924,36 +972,65 @@ final class ProcessingEngine {
                     lastUpscaled = up
                     if let sig { redundancy.record(signature: sig) }
                 }
-                let pts = CMTime(value: CMTimeValue(pushed), timescale: CMTimeScale(fps))
+                let pts = CMTime(value: Int64(pushed) * frameDurationUnits, timescale: timebaseScale)
                 pushed += 1
                 channel.push((up, pts))
             }
             channel.close()
         }
 
-        // --- Consumer: the AVAssetWriter callback drains the channel. nil pop =
-        // producer hit EOF (clean) or broke on failure (mlFailure set). Order is
-        // preserved by the channel's FIFO. videoDone: true = clean EOS, false =
-        // cancelled OR ML failure.
+        // --- Consumer: the AVAssetWriter callback drains the channel with backpressure staging.
+        // If adaptor.append returns false (encoder FIFO saturated), the unwritten frame is held
+        // in pendingStagingFrame and retried on the next callback rather than silently dropped.
+        var pendingStagingFrame: (CVPixelBuffer, CMTime)? = nil
+
         let videoDone = await withCheckedContinuation { (cont: CheckedContinuation<Bool, Never>) in
             vInput.requestMediaDataWhenReady(on: q) {
                 while vInput.isReadyForMoreMediaData {
-                    if isCancelled() { source.cancel(); channel.close(); cont.resume(returning: false); return }
-                    guard let (buf, pts) = channel.pop() else {
-                        vInput.markAsFinished(); cont.resume(returning: mlFailure == nil); return
+                    if isCancelled() {
+                        source.cancel()
+                        channel.close()
+                        cont.resume(returning: false)
+                        return
                     }
-                    adaptor.append(buf, withPresentationTime: pts)
-                    frameIndex += 1
-                    if frameIndex % 10 == 0 {
-                        let f = frameIndex
-                        let elapsed = Date().timeIntervalSince(start)
-                        let cur = Double(f) / max(elapsed, 0.001)
-                        Task { @MainActor in
-                            job.progress = min(0.99, Double(f) / Double(totalFrames))
-                            job.currentFrame = f
-                            job.fps = String(format: "%.1f", cur)
-                            job.speed = String(format: "x%.3f", cur / fps)
+
+                    let currentItem: (CVPixelBuffer, CMTime)
+                    if let staged = pendingStagingFrame {
+                        currentItem = staged
+                        pendingStagingFrame = nil
+                    } else if let popped = channel.pop() {
+                        currentItem = popped
+                    } else {
+                        // Channel drained and closed -> clean EOS
+                        vInput.markAsFinished()
+                        cont.resume(returning: mlFailure == nil)
+                        return
+                    }
+
+                    if adaptor.append(currentItem.0, withPresentationTime: currentItem.1) {
+                        frameIndex += 1
+                        if frameIndex % 10 == 0 {
+                            let f = frameIndex
+                            let elapsed = Date().timeIntervalSince(start)
+                            let cur = Double(f) / max(elapsed, 0.001)
+                            Task { @MainActor in
+                                job.progress = min(0.99, Double(f) / Double(totalFrames))
+                                job.currentFrame = f
+                                job.fps = String(format: "%.1f", cur)
+                                job.speed = String(format: "x%.3f", cur / fps)
+                            }
                         }
+                    } else {
+                        // Check if writer failed
+                        if writer.status == .failed {
+                            source.cancel()
+                            channel.close()
+                            cont.resume(returning: false)
+                            return
+                        }
+                        // Encoder buffer full: preserve unwritten frame in staging register and yield
+                        pendingStagingFrame = currentItem
+                        break
                     }
                 }
             }

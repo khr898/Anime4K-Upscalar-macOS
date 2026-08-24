@@ -104,9 +104,19 @@ struct FFmpegLocator {
             )
             try icdContent.write(to: icdJSONURL, atomically: true, encoding: .utf8)
             cachedICDPath = icdJSONURL.path
+            purgeLegacyShaderCaches()
             return cachedICDPath
         } catch {
             return nil
+        }
+    }
+
+    /// Purges legacy CombinedShaders cache directory created by previous versions.
+    static func purgeLegacyShaderCaches() {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+        if let dir = caches?.appendingPathComponent("CombinedShaders", isDirectory: true),
+           FileManager.default.fileExists(atPath: dir.path) {
+            try? FileManager.default.removeItem(at: dir)
         }
     }
 

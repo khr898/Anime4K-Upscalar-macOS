@@ -34,3 +34,4 @@ __pycache__/
 .claude/
 *.app/
 dist/
+.agents/

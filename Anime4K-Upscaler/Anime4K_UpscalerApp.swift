@@ -29,6 +29,78 @@ struct Anime4K_UpscalerApp: App {
         }
     }
 
+    /// Add files to the active tab.
+    private func addFilesToActiveTab() {
+        switch viewModel.selectedMainTab {
+        case .upscale:        viewModel.addFiles()
+        case .compress:       compressVM.addFiles()
+        case .streamOptimize: streamOptimizeVM.addFiles()
+        }
+    }
+
+    /// Remove selected file in the active tab.
+    private func removeSelectedFileInActiveTab() {
+        switch viewModel.selectedMainTab {
+        case .upscale:
+            viewModel.removeSelectedFile()
+        case .compress:
+            if let id = compressVM.selectedFileID { compressVM.removeFile(id: id) }
+        case .streamOptimize:
+            if let id = streamOptimizeVM.selectedFileID { streamOptimizeVM.removeFile(id: id) }
+        }
+    }
+
+    /// Remove all files in the active tab.
+    private func removeAllFilesInActiveTab() {
+        switch viewModel.selectedMainTab {
+        case .upscale:        viewModel.removeAllFiles()
+        case .compress:       compressVM.removeAllFiles()
+        case .streamOptimize: streamOptimizeVM.removeAllFiles()
+        }
+    }
+
+    /// Select output directory for the active tab.
+    private func selectOutputDirectoryForActiveTab() {
+        switch viewModel.selectedMainTab {
+        case .upscale:        viewModel.selectOutputDirectory()
+        case .compress:       compressVM.selectOutputDirectory()
+        case .streamOptimize: streamOptimizeVM.selectDestinationDirectory()
+        }
+    }
+
+    /// Start processing on the active tab.
+    private func startProcessingActiveTab() {
+        switch viewModel.selectedMainTab {
+        case .upscale:        viewModel.startProcessing()
+        case .compress:       compressVM.startProcessing()
+        case .streamOptimize: streamOptimizeVM.startProcessing()
+        }
+    }
+
+    private var activeTabHasSelectedFile: Bool {
+        switch viewModel.selectedMainTab {
+        case .upscale:        return viewModel.selectedFileID != nil
+        case .compress:       return compressVM.selectedFileID != nil
+        case .streamOptimize: return streamOptimizeVM.selectedFileID != nil
+        }
+    }
+
+    private var activeTabHasFiles: Bool {
+        switch viewModel.selectedMainTab {
+        case .upscale:        return !viewModel.files.isEmpty
+        case .compress:       return !compressVM.files.isEmpty
+        case .streamOptimize: return !streamOptimizeVM.files.isEmpty
+        }
+    }
+
+    private var activeTabCanStartProcessing: Bool {
+        switch viewModel.selectedMainTab {
+        case .upscale:        return viewModel.canStartProcessing
+        case .compress:       return compressVM.canStartProcessing
+        case .streamOptimize: return streamOptimizeVM.canStartProcessing
+        }
+    }
+
     var body: some Scene {
         WindowGroup {
             ContentView()
@@ -45,28 +117,28 @@ struct Anime4K_UpscalerApp: App {
             // File menu commands
             CommandGroup(after: .newItem) {
                 Button("Add Video Files...") {
-                    viewModel.addFiles()
+                    addFilesToActiveTab()
                 }
                 .keyboardShortcut("o", modifiers: .command)
 
                 Divider()
 
                 Button("Remove Selected File") {
-                    viewModel.removeSelectedFile()
+                    removeSelectedFileInActiveTab()
                 }
                 .keyboardShortcut(.delete, modifiers: .command)
-                .disabled(viewModel.selectedFileID == nil)
+                .disabled(!activeTabHasSelectedFile)
 
                 Button("Remove All Files") {
-                    viewModel.removeAllFiles()
+                    removeAllFilesInActiveTab()
                 }
                 .keyboardShortcut(.delete, modifiers: [.command, .shift])
-                .disabled(viewModel.files.isEmpty)
+                .disabled(!activeTabHasFiles)
 
                 Divider()
 
                 Button("Choose Output Directory…") {
-                    viewModel.selectOutputDirectory()
+                    selectOutputDirectoryForActiveTab()
                 }
                 .keyboardShortcut("d", modifiers: [.command, .shift])
             }
@@ -74,10 +146,10 @@ struct Anime4K_UpscalerApp: App {
             // Processing commands
             CommandMenu("Processing") {
                 Button("Start Processing") {
-                    viewModel.startProcessing()
+                    startProcessingActiveTab()
                 }
                 .keyboardShortcut("r", modifiers: .command)
-                .disabled(!viewModel.canStartProcessing)
+                .disabled(!activeTabCanStartProcessing)
 
                 Button("Cancel Processing") {
                     cancelActiveTabQueue()

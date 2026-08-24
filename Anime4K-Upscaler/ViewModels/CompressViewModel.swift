@@ -26,6 +26,7 @@ final class CompressViewModel {
     var contentType: ContentType = .liveAction
     var bFrames: Int = 3
     var longGOPEnabled: Bool = false
+    var prioritizeSpeed: Bool = false
 
     // MARK: - Output
 
@@ -204,7 +205,8 @@ final class CompressViewModel {
             svtAV1Preset: svtAV1Preset,
             contentType: contentType,
             bFrames: bFrames,
-            longGOPEnabled: longGOPEnabled
+            longGOPEnabled: longGOPEnabled,
+            prioritizeSpeed: prioritizeSpeed
         )
     }
 
